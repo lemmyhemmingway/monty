@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"monty/handlers"
+	"github.com/monty/handlers"
 )
 
 func main() {
