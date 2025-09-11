@@ -16,13 +16,15 @@ func Start(endpoints []Endpoint) {
 		go func(ep Endpoint) {
 			ticker := time.NewTicker(ep.Interval)
 			for range ticker.C {
-				resp, err := http.Get(ep.URL)
-				if err != nil {
-					log.Printf("error requesting %s: %v", ep.URL, err)
-					continue
-				}
-				log.Printf("GET %s -> %s", ep.URL, resp.Status)
-				resp.Body.Close()
+				go func(url string) {
+					resp, err := http.Get(url)
+					if err != nil {
+						log.Printf("error requesting %s: %v", url, err)
+						return
+					}
+					log.Printf("GET %s -> %s", url, resp.Status)
+					resp.Body.Close()
+				}(ep.URL)
 			}
 		}(ep)
 	}
