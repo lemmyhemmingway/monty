@@ -7,7 +7,8 @@ services:
     environment:
       DATABASE_URL: postgres://monty:monty@postgres:5432/monty?sslmode=disable
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
   postgres:
     image: postgres:15
     restart: always
@@ -17,5 +18,10 @@ services:
       POSTGRES_DB: monty
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 volumes:
   postgres-data:
