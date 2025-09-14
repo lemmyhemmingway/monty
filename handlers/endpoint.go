@@ -11,12 +11,23 @@ import (
 func RegisterEndpoints(app *fiber.App) {
 	app.Get("/endpoints", listEndpoints)
 	app.Post("/endpoints", createEndpoint)
+	app.Get("/endpoint-urls", listEndpointURLs)
 }
 
 func listEndpoints(c *fiber.Ctx) error {
 	var endpoints []models.Endpoint
 	models.DB.Find(&endpoints)
 	return c.JSON(endpoints)
+}
+
+func listEndpointURLs(c *fiber.Ctx) error {
+	var endpoints []models.Endpoint
+	models.DB.Find(&endpoints)
+	urls := make([]string, len(endpoints))
+	for i, ep := range endpoints {
+		urls[i] = ep.URL
+	}
+	return c.JSON(urls)
 }
 
 func createEndpoint(c *fiber.Ctx) error {
