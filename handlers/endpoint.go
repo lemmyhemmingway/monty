@@ -24,16 +24,41 @@ func RegisterEndpoints(app *fiber.App) {
 }
 
 func calculateUptime(endpointID string) float64 {
-	var total int64
-	var successful int64
+	var statuses []models.Status
+	models.DB.Where("endpoint_id = ?", endpointID).Find(&statuses)
 
-	models.DB.Model(&models.Status{}).Where("endpoint_id = ?", endpointID).Count(&total)
-	models.DB.Model(&models.Status{}).Where("endpoint_id = ? AND code >= 200 AND code < 300", endpointID).Count(&successful)
-
-	if total == 0 {
+	if len(statuses) == 0 {
 		return 0
 	}
-	return (float64(successful) / float64(total)) * 100
+
+	// Get endpoint config to determine success criteria
+	var ep models.Endpoint
+	if err := models.DB.First(&ep, "id = ?", endpointID).Error; err != nil {
+		return 0
+	}
+
+	expectedCodes := []int(ep.ExpectedStatusCodes)
+	if len(expectedCodes) == 0 {
+		expectedCodes = []int{200, 201, 202, 203, 204, 205, 206, 207, 208, 226, 300, 301, 302, 303, 304, 305, 307, 308}
+	}
+
+	successful := 0
+	for _, status := range statuses {
+		if status.ErrorMessage == "" { // No network error
+			codeExpected := false
+			for _, code := range expectedCodes {
+				if status.Code == code {
+					codeExpected = true
+					break
+				}
+			}
+			if codeExpected && status.ResponseTime <= ep.MaxResponseTime {
+				successful++
+			}
+		}
+	}
+
+	return (float64(successful) / float64(len(statuses))) * 100
 }
 
 func listEndpoints(c *fiber.Ctx) error {
@@ -64,8 +89,11 @@ func listEndpointURLs(c *fiber.Ctx) error {
 
 func createEndpoint(c *fiber.Ctx) error {
 	var input struct {
-		URL      string `json:"url"`
-		Interval int    `json:"interval"`
+		URL                 string `json:"url"`
+		Interval            int    `json:"interval"`
+		Timeout             *int   `json:"timeout,omitempty"`             // optional, defaults to 30
+		ExpectedStatusCodes []int  `json:"expected_status_codes,omitempty"` // optional, defaults to 2xx/3xx
+		MaxResponseTime     *int   `json:"max_response_time,omitempty"`    // optional, defaults to 5000ms
 	}
 	if err := c.BodyParser(&input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
@@ -76,15 +104,29 @@ func createEndpoint(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "url and interval must be provided"})
 	}
 
+	// Set defaults for optional fields
+	timeout := 30
+	if input.Timeout != nil && *input.Timeout > 0 {
+		timeout = *input.Timeout
+	}
+
+	maxResponseTime := 5000
+	if input.MaxResponseTime != nil && *input.MaxResponseTime > 0 {
+		maxResponseTime = *input.MaxResponseTime
+	}
+
 	ep := models.Endpoint{
-		ID:        uuid.New().String(),
-		URL:       input.URL,
-		Interval:  input.Interval,
-		CreatedAt: time.Now(),
+		ID:                  uuid.New().String(),
+		URL:                 input.URL,
+		Interval:            input.Interval,
+		Timeout:             timeout,
+		ExpectedStatusCodes: models.IntArray(input.ExpectedStatusCodes),
+		MaxResponseTime:     maxResponseTime,
+		CreatedAt:           time.Now(),
 	}
 	if err := models.DB.Create(&ep).Error; err != nil {
 		if errors.Is(err, models.ErrInvalidEndpoint) {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "url and interval must be provided"})
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid endpoint configuration"})
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not create endpoint"})
 	}

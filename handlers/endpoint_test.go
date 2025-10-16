@@ -323,3 +323,50 @@ func TestListEndpointStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateEndpointWithHealthCheckConfig(t *testing.T) {
+	app := newTestApp(t)
+
+	payload := `{
+		"url": "http://test-service.com",
+		"interval": 30,
+		"timeout": 60,
+		"expected_status_codes": [200, 201, 202],
+		"max_response_time": 3000
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/endpoints", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("failed to perform request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, resp.StatusCode)
+	}
+
+	var body models.Endpoint
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body.URL != "http://test-service.com" {
+		t.Fatalf("expected URL to match, got %s", body.URL)
+	}
+	if body.Timeout != 60 {
+		t.Fatalf("expected timeout 60, got %d", body.Timeout)
+	}
+	if body.MaxResponseTime != 3000 {
+		t.Fatalf("expected max response time 3000, got %d", body.MaxResponseTime)
+	}
+	if len(body.ExpectedStatusCodes) != 3 {
+		t.Fatalf("expected 3 expected status codes, got %d", len(body.ExpectedStatusCodes))
+	}
+
+	// Verify it was persisted
+	var stored models.Endpoint
+	if err := models.DB.First(&stored, "id = ?", body.ID).Error; err != nil {
+		t.Fatalf("expected endpoint persisted: %v", err)
+	}
+}

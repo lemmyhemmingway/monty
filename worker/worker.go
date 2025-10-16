@@ -12,9 +12,12 @@ import (
 )
 
 type Endpoint struct {
-	ID       string
-	URL      string
-	Interval time.Duration
+	ID                   string
+	URL                  string
+	Interval             time.Duration
+	Timeout              time.Duration
+	ExpectedStatusCodes  []int
+	MaxResponseTime      time.Duration
 }
 
 type Worker struct {
@@ -94,31 +97,87 @@ func (w *Worker) monitorEndpoint(ctx context.Context, ep Endpoint) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			go w.checkEndpoint(ep.ID, ep.URL)
+			go w.checkEndpoint(ep)
 		}
 	}
 }
 
-func (w *Worker) checkEndpoint(id, url string) {
-	resp, err := http.Get(url)
+func (w *Worker) checkEndpoint(ep Endpoint) {
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: ep.Timeout,
+	}
+
+	// Determine expected status codes (default to 2xx and 3xx if not specified)
+	expectedCodes := ep.ExpectedStatusCodes
+	if len(expectedCodes) == 0 {
+		expectedCodes = []int{200, 201, 202, 203, 204, 205, 206, 207, 208, 226, 300, 301, 302, 303, 304, 305, 307, 308}
+	}
+
+	// Measure response time
+	start := time.Now()
+	resp, err := client.Get(ep.URL)
+	responseTime := int(time.Since(start).Milliseconds())
+
 	code := 0
+	errorMessage := ""
+
 	if err != nil {
-		log.Printf("error requesting %s: %v", url, err)
+		log.Printf("error requesting %s: %v", ep.URL, err)
+		errorMessage = err.Error()
 	} else {
 		code = resp.StatusCode
-		log.Printf("GET %s -> %s", url, resp.Status)
+		log.Printf("GET %s -> %s (%dms)", ep.URL, resp.Status, responseTime)
 		resp.Body.Close()
 	}
 
+	// Determine if the check was successful
+	isSuccessful := w.isCheckSuccessful(code, responseTime, errorMessage, expectedCodes, int(ep.MaxResponseTime.Milliseconds()))
+
 	status := models.Status{
-		ID:         uuid.New().String(),
-		EndpointID: id,
-		Code:       code,
-		CheckedAt:  time.Now(),
+		ID:           uuid.New().String(),
+		EndpointID:   ep.ID,
+		Code:         code,
+		ResponseTime: responseTime,
+		ErrorMessage: errorMessage,
+		CheckedAt:    time.Now(),
 	}
 	if err := models.DB.Create(&status).Error; err != nil {
-		log.Printf("failed to save status for %s: %v", url, err)
+		log.Printf("failed to save status for %s: %v", ep.URL, err)
 	}
+
+	// Log success/failure status
+	if isSuccessful {
+		log.Printf("✓ Health check PASSED for %s", ep.URL)
+	} else {
+		log.Printf("✗ Health check FAILED for %s", ep.URL)
+	}
+}
+
+func (w *Worker) isCheckSuccessful(code, responseTime int, errorMessage string, expectedCodes []int, maxResponseTime int) bool {
+	// If there was a network error, it's not successful
+	if errorMessage != "" {
+		return false
+	}
+
+	// Check if status code is in expected range
+	codeExpected := false
+	for _, expectedCode := range expectedCodes {
+		if code == expectedCode {
+			codeExpected = true
+			break
+		}
+	}
+	if !codeExpected {
+		return false
+	}
+
+	// Check response time
+	if responseTime > maxResponseTime {
+		return false
+	}
+
+	return true
 }
 
 func (w *Worker) discoveryLoop() {
@@ -143,10 +202,18 @@ func (w *Worker) discoverEndpoints() {
 	// Create map of current DB endpoints
 	dbEndpointMap := make(map[string]Endpoint)
 	for _, ep := range dbEndpoints {
+		expectedCodes := []int(ep.ExpectedStatusCodes)
+		if len(expectedCodes) == 0 {
+			expectedCodes = []int{200, 201, 202, 203, 204, 205, 206, 207, 208, 226, 300, 301, 302, 303, 304, 305, 307, 308}
+		}
+
 		dbEndpointMap[ep.ID] = Endpoint{
-			ID:       ep.ID,
-			URL:      ep.URL,
-			Interval: time.Duration(ep.Interval) * time.Second,
+			ID:                  ep.ID,
+			URL:                 ep.URL,
+			Interval:            time.Duration(ep.Interval) * time.Second,
+			Timeout:             time.Duration(ep.Timeout) * time.Second,
+			ExpectedStatusCodes: expectedCodes,
+			MaxResponseTime:     time.Duration(ep.MaxResponseTime) * time.Millisecond,
 		}
 	}
 
