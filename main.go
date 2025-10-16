@@ -24,9 +24,10 @@ func main() {
 	models.DB.Find(&eps)
 	var workerEps []worker.Endpoint
 	for _, ep := range eps {
-		workerEps = append(workerEps, worker.Endpoint{URL: ep.URL, Interval: time.Duration(ep.Interval) * time.Second})
+		workerEps = append(workerEps, worker.Endpoint{ID: ep.ID, URL: ep.URL, Interval: time.Duration(ep.Interval) * time.Second})
 	}
-	worker.Start(workerEps)
+	w := worker.NewWorker(1 * time.Minute) // Check for new endpoints every minute
+	w.Start(workerEps)
 
 	app.Listen(":3000")
 }

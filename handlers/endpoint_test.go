@@ -6,12 +6,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/monty/models"
 	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+"gorm.io/gorm"
 )
 
 func setupTestDB(t *testing.T) {
@@ -120,13 +121,20 @@ func TestListEndpoints(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
 	}
 
-	var body []models.Endpoint
+	var body []EndpointWithUptime
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
 	if len(body) != 2 {
 		t.Fatalf("expected 2 endpoints, got %d", len(body))
+	}
+
+	// Check that uptime is calculated (should be 0 since no statuses exist yet)
+	for _, ep := range body {
+		if ep.Uptime != 0 {
+			t.Fatalf("expected uptime 0 for endpoint with no statuses, got %f", ep.Uptime)
+		}
 	}
 }
 
@@ -164,6 +172,154 @@ func TestListEndpointURLs(t *testing.T) {
 	for _, url := range urls {
 		if _, ok := expected[url]; !ok {
 			t.Fatalf("unexpected url in list: %s", url)
+		}
+	}
+}
+
+func TestListEndpointsWithUptime(t *testing.T) {
+	app := newTestApp(t)
+
+	epID := uuid.New().String()
+	ep := models.Endpoint{
+		ID: epID, URL: "http://service-a", Interval: 10,
+	}
+	if err := models.DB.Create(&ep).Error; err != nil {
+		t.Fatalf("failed to seed endpoint: %v", err)
+	}
+
+	// Create some statuses: 3 successful (200), 1 failed (500), 1 error (0)
+	statuses := []models.Status{
+		{ID: uuid.New().String(), EndpointID: epID, Code: 200, CheckedAt: time.Now()},
+		{ID: uuid.New().String(), EndpointID: epID, Code: 200, CheckedAt: time.Now()},
+		{ID: uuid.New().String(), EndpointID: epID, Code: 200, CheckedAt: time.Now()},
+		{ID: uuid.New().String(), EndpointID: epID, Code: 500, CheckedAt: time.Now()},
+		{ID: uuid.New().String(), EndpointID: epID, Code: 0, CheckedAt: time.Now()},
+	}
+	if err := models.DB.Create(&statuses).Error; err != nil {
+		t.Fatalf("failed to seed statuses: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("failed to perform request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	var body []EndpointWithUptime
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body) != 1 {
+		t.Fatalf("expected 1 endpoint, got %d", len(body))
+	}
+
+	// Expected uptime: 3 successful out of 5 total = 60%
+	expectedUptime := 60.0
+	if body[0].Uptime != expectedUptime {
+		t.Fatalf("expected uptime %f, got %f", expectedUptime, body[0].Uptime)
+	}
+}
+
+func TestListStatuses(t *testing.T) {
+	app := newTestApp(t)
+
+	// Create test endpoints
+	ep1ID := uuid.New().String()
+	ep2ID := uuid.New().String()
+	eps := []models.Endpoint{
+		{ID: ep1ID, URL: "http://service-a", Interval: 10},
+		{ID: ep2ID, URL: "http://service-b", Interval: 20},
+	}
+	if err := models.DB.Create(&eps).Error; err != nil {
+		t.Fatalf("failed to seed endpoints: %v", err)
+	}
+
+	// Create test statuses
+	statuses := []models.Status{
+		{ID: uuid.New().String(), EndpointID: ep1ID, Code: 200, CheckedAt: time.Now().Add(-time.Minute)},
+		{ID: uuid.New().String(), EndpointID: ep2ID, Code: 500, CheckedAt: time.Now()},
+	}
+	if err := models.DB.Create(&statuses).Error; err != nil {
+		t.Fatalf("failed to seed statuses: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/statuses", nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("failed to perform request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	var body []models.Status
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body) != 2 {
+		t.Fatalf("expected 2 statuses, got %d", len(body))
+	}
+
+	// Check that they're ordered by checked_at desc (most recent first)
+	if body[0].Code != 500 || body[1].Code != 200 {
+		t.Fatalf("expected statuses ordered by checked_at desc, got codes: %d, %d", body[0].Code, body[1].Code)
+	}
+}
+
+func TestListEndpointStatuses(t *testing.T) {
+	app := newTestApp(t)
+
+	// Create test endpoints
+	ep1ID := uuid.New().String()
+	ep2ID := uuid.New().String()
+	eps := []models.Endpoint{
+		{ID: ep1ID, URL: "http://service-a", Interval: 10},
+		{ID: ep2ID, URL: "http://service-b", Interval: 20},
+	}
+	if err := models.DB.Create(&eps).Error; err != nil {
+		t.Fatalf("failed to seed endpoints: %v", err)
+	}
+
+	// Create test statuses - some for ep1, some for ep2
+	statuses := []models.Status{
+		{ID: uuid.New().String(), EndpointID: ep1ID, Code: 200, CheckedAt: time.Now().Add(-time.Minute)},
+		{ID: uuid.New().String(), EndpointID: ep1ID, Code: 404, CheckedAt: time.Now()},
+		{ID: uuid.New().String(), EndpointID: ep2ID, Code: 500, CheckedAt: time.Now()},
+	}
+	if err := models.DB.Create(&statuses).Error; err != nil {
+		t.Fatalf("failed to seed statuses: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/endpoints/"+ep1ID+"/statuses", nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("failed to perform request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	var body []models.Status
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body) != 2 {
+		t.Fatalf("expected 2 statuses for endpoint, got %d", len(body))
+	}
+
+	// Check that all returned statuses belong to the correct endpoint
+	for _, status := range body {
+		if status.EndpointID != ep1ID {
+			t.Fatalf("expected all statuses to belong to endpoint %s, got %s", ep1ID, status.EndpointID)
 		}
 	}
 }

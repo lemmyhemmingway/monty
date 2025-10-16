@@ -10,16 +10,46 @@ import (
 	"github.com/monty/models"
 )
 
+type EndpointWithUptime struct {
+	models.Endpoint
+	Uptime float64 `json:"uptime"`
+}
+
 func RegisterEndpoints(app *fiber.App) {
 	app.Get("/endpoints", listEndpoints)
 	app.Post("/endpoints", createEndpoint)
 	app.Get("/endpoint-urls", listEndpointURLs)
+	app.Get("/statuses", listStatuses)
+	app.Get("/endpoints/:id/statuses", listEndpointStatuses)
+}
+
+func calculateUptime(endpointID string) float64 {
+	var total int64
+	var successful int64
+
+	models.DB.Model(&models.Status{}).Where("endpoint_id = ?", endpointID).Count(&total)
+	models.DB.Model(&models.Status{}).Where("endpoint_id = ? AND code >= 200 AND code < 300", endpointID).Count(&successful)
+
+	if total == 0 {
+		return 0
+	}
+	return (float64(successful) / float64(total)) * 100
 }
 
 func listEndpoints(c *fiber.Ctx) error {
 	var endpoints []models.Endpoint
 	models.DB.Find(&endpoints)
-	return c.JSON(endpoints)
+
+	var response []EndpointWithUptime
+	for _, ep := range endpoints {
+		uptime := calculateUptime(ep.ID)
+		response = append(response, EndpointWithUptime{
+			Endpoint: ep,
+			Uptime:   uptime,
+		})
+	}
+
+	return c.JSON(response)
 }
 
 func listEndpointURLs(c *fiber.Ctx) error {
@@ -59,4 +89,21 @@ func createEndpoint(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not create endpoint"})
 	}
 	return c.Status(fiber.StatusCreated).JSON(ep)
+}
+
+func listStatuses(c *fiber.Ctx) error {
+	var statuses []models.Status
+	models.DB.Order("checked_at desc").Find(&statuses)
+	return c.JSON(statuses)
+}
+
+func listEndpointStatuses(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if id == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "endpoint id required"})
+	}
+
+	var statuses []models.Status
+	models.DB.Where("endpoint_id = ?", id).Order("checked_at desc").Find(&statuses)
+	return c.JSON(statuses)
 }
