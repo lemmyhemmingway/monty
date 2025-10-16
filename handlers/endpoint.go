@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -38,6 +40,12 @@ func createEndpoint(c *fiber.Ctx) error {
 	if err := c.BodyParser(&input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
 	}
+
+	input.URL = strings.TrimSpace(input.URL)
+	if input.URL == "" || input.Interval <= 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "url and interval must be provided"})
+	}
+
 	ep := models.Endpoint{
 		ID:        uuid.New().String(),
 		URL:       input.URL,
@@ -45,6 +53,9 @@ func createEndpoint(c *fiber.Ctx) error {
 		CreatedAt: time.Now(),
 	}
 	if err := models.DB.Create(&ep).Error; err != nil {
+		if errors.Is(err, models.ErrInvalidEndpoint) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "url and interval must be provided"})
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not create endpoint"})
 	}
 	return c.Status(fiber.StatusCreated).JSON(ep)
