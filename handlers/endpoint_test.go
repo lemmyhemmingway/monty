@@ -23,7 +23,7 @@ func setupTestDB(t *testing.T) {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
 
-	if err := db.AutoMigrate(&models.Endpoint{}, &models.Status{}); err != nil {
+	if err := db.AutoMigrate(&models.Endpoint{}, &models.Status{}, &models.SSLStatus{}); err != nil {
 		t.Fatalf("failed to migrate schema: %v", err)
 	}
 
@@ -367,6 +367,155 @@ func TestCreateEndpointWithHealthCheckConfig(t *testing.T) {
 	// Verify it was persisted
 	var stored models.Endpoint
 	if err := models.DB.First(&stored, "id = ?", body.ID).Error; err != nil {
-		t.Fatalf("expected endpoint persisted: %v", err)
+	t.Fatalf("expected endpoint persisted: %v", err)
+	}
+}
+
+func TestCreateSSLEndpoint(t *testing.T) {
+	app := newTestApp(t)
+
+	payload := `{
+		"url": "https://example.com",
+		"check_type": "ssl",
+		"interval": 86400,
+		"min_days_valid": 14,
+		"check_chain": true,
+		"acceptable_tls_versions": ["TLS 1.3"]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/endpoints", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("failed to perform request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, resp.StatusCode)
+	}
+
+	var body models.Endpoint
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body.CheckType != "ssl" {
+		t.Fatalf("expected check_type 'ssl', got %s", body.CheckType)
+	}
+	if body.MinDaysValid != 14 {
+		t.Fatalf("expected min_days_valid 14, got %d", body.MinDaysValid)
+	}
+	if body.CheckChain != true {
+		t.Fatalf("expected check_chain true, got %v", body.CheckChain)
+	}
+	if len(body.AcceptableTLSVersions) != 1 || body.AcceptableTLSVersions[0] != "TLS 1.3" {
+	t.Fatalf("expected acceptable_tls_versions to contain TLS 1.3, got %v", body.AcceptableTLSVersions)
+	}
+}
+
+func TestCreateSSLEndpointDefaults(t *testing.T) {
+	app := newTestApp(t)
+
+	payload := `{
+		"url": "https://example.com",
+		"check_type": "ssl",
+		"interval": 60
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/endpoints", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("failed to perform request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, resp.StatusCode)
+	}
+
+	var body models.Endpoint
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body.CheckType != "ssl" {
+		t.Fatalf("expected check_type 'ssl', got %s", body.CheckType)
+	}
+	if body.Interval != 86400 { // Should be set to 24h for SSL
+		t.Fatalf("expected interval 86400 for SSL, got %d", body.Interval)
+	}
+	if body.MinDaysValid != 30 {
+		t.Fatalf("expected default min_days_valid 30, got %d", body.MinDaysValid)
+	}
+	if body.CheckChain != true {
+		t.Fatalf("expected default check_chain true, got %v", body.CheckChain)
+	}
+	if len(body.AcceptableTLSVersions) != 2 {
+		t.Fatalf("expected default acceptable_tls_versions length 2, got %d", len(body.AcceptableTLSVersions))
+	}
+}
+
+func TestListSSLStatuses(t *testing.T) {
+	app := newTestApp(t)
+
+	// Create test SSL statuses
+	sslStatuses := []models.SSLStatus{
+		{
+			ID:                   uuid.New().String(),
+			EndpointID:           uuid.New().String(),
+			CertificateExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+			DaysUntilExpiry:      30,
+			IsValid:              true,
+			DomainMatches:        true,
+			ChainValid:           true,
+			Issuer:               "Test Issuer 1",
+			Subject:              "example.com",
+			TLSVersion:           "TLS 1.3",
+			SerialNumber:         "12345",
+			ErrorMessage:         "",
+			CheckedAt:            time.Now(),
+		},
+		{
+			ID:                   uuid.New().String(),
+			EndpointID:           uuid.New().String(),
+			CertificateExpiresAt: time.Now().Add(10 * 24 * time.Hour),
+			DaysUntilExpiry:      10,
+			IsValid:              false,
+			DomainMatches:        true,
+			ChainValid:           true,
+			Issuer:               "Test Issuer 2",
+			Subject:              "api.example.com",
+			TLSVersion:           "TLS 1.2",
+			SerialNumber:         "67890",
+			ErrorMessage:         "certificate expires soon",
+			CheckedAt:            time.Now().Add(-time.Minute),
+		},
+	}
+	if err := models.DB.Create(&sslStatuses).Error; err != nil {
+		t.Fatalf("failed to seed SSL statuses: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/ssl-statuses", nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("failed to perform request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	var body []models.SSLStatus
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body) != 2 {
+		t.Fatalf("expected 2 SSL statuses, got %d", len(body))
+	}
+
+	// Check ordering (most recent first)
+	if body[0].TLSVersion != "TLS 1.3" || body[1].TLSVersion != "TLS 1.2" {
+		t.Fatalf("expected SSL statuses ordered by checked_at desc")
 	}
 }

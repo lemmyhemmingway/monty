@@ -21,19 +21,27 @@ func RegisterEndpoints(app *fiber.App) {
 	app.Get("/endpoint-urls", listEndpointURLs)
 	app.Get("/statuses", listStatuses)
 	app.Get("/endpoints/:id/statuses", listEndpointStatuses)
+	// SSL status endpoints
+	app.Get("/ssl-statuses", listSSLStatuses)
+	app.Get("/endpoints/:id/ssl-statuses", listEndpointSSLStatuses)
 }
 
 func calculateUptime(endpointID string) float64 {
+	// Get endpoint config to determine check type
+	var ep models.Endpoint
+	if err := models.DB.First(&ep, "id = ?", endpointID).Error; err != nil {
+		return 0
+	}
+
+	if ep.CheckType == "ssl" {
+		return calculateSSLUptime(endpointID)
+	}
+
+	// HTTP uptime calculation
 	var statuses []models.Status
 	models.DB.Where("endpoint_id = ?", endpointID).Find(&statuses)
 
 	if len(statuses) == 0 {
-		return 0
-	}
-
-	// Get endpoint config to determine success criteria
-	var ep models.Endpoint
-	if err := models.DB.First(&ep, "id = ?", endpointID).Error; err != nil {
 		return 0
 	}
 
@@ -59,6 +67,24 @@ func calculateUptime(endpointID string) float64 {
 	}
 
 	return (float64(successful) / float64(len(statuses))) * 100
+}
+
+func calculateSSLUptime(endpointID string) float64 {
+	var sslStatuses []models.SSLStatus
+	models.DB.Where("endpoint_id = ?", endpointID).Find(&sslStatuses)
+
+	if len(sslStatuses) == 0 {
+		return 0
+	}
+
+	successful := 0
+	for _, status := range sslStatuses {
+		if status.IsValid {
+			successful++
+		}
+	}
+
+	return (float64(successful) / float64(len(sslStatuses))) * 100
 }
 
 func listEndpoints(c *fiber.Ctx) error {
@@ -89,11 +115,17 @@ func listEndpointURLs(c *fiber.Ctx) error {
 
 func createEndpoint(c *fiber.Ctx) error {
 	var input struct {
-		URL                 string `json:"url"`
-		Interval            int    `json:"interval"`
-		Timeout             *int   `json:"timeout,omitempty"`             // optional, defaults to 30
-		ExpectedStatusCodes []int  `json:"expected_status_codes,omitempty"` // optional, defaults to 2xx/3xx
-		MaxResponseTime     *int   `json:"max_response_time,omitempty"`    // optional, defaults to 5000ms
+		URL                  string   `json:"url"`
+		CheckType            string   `json:"check_type,omitempty"`            // optional, defaults to "http"
+		Interval             int      `json:"interval"`
+		Timeout              *int     `json:"timeout,omitempty"`               // optional, defaults to 30
+		ExpectedStatusCodes  []int    `json:"expected_status_codes,omitempty"`  // optional, defaults to 2xx/3xx
+		MaxResponseTime      *int     `json:"max_response_time,omitempty"`      // optional, defaults to 5000ms
+		// SSL-specific fields
+		MinDaysValid         *int     `json:"min_days_valid,omitempty"`         // optional, defaults to 30
+		CheckChain           *bool    `json:"check_chain,omitempty"`            // optional, defaults to true
+		CheckDomainMatch     *bool    `json:"check_domain_match,omitempty"`     // optional, defaults to true
+		AcceptableTLSVersions []string `json:"acceptable_tls_versions,omitempty"` // optional, defaults to ["TLS 1.2", "TLS 1.3"]
 	}
 	if err := c.BodyParser(&input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
@@ -115,14 +147,45 @@ func createEndpoint(c *fiber.Ctx) error {
 		maxResponseTime = *input.MaxResponseTime
 	}
 
+	// SSL-specific defaults
+	checkType := "http"
+	if input.CheckType != "" {
+		checkType = input.CheckType
+	}
+
+	minDaysValid := 30
+	if input.MinDaysValid != nil && *input.MinDaysValid > 0 {
+		minDaysValid = *input.MinDaysValid
+	}
+
+	checkChain := true
+	if input.CheckChain != nil {
+		checkChain = *input.CheckChain
+	}
+
+	checkDomainMatch := true
+	if input.CheckDomainMatch != nil {
+		checkDomainMatch = *input.CheckDomainMatch
+	}
+
+	acceptableTLSVersions := models.StringArray{"TLS 1.2", "TLS 1.3"}
+	if len(input.AcceptableTLSVersions) > 0 {
+		acceptableTLSVersions = models.StringArray(input.AcceptableTLSVersions)
+	}
+
 	ep := models.Endpoint{
-		ID:                  uuid.New().String(),
-		URL:                 input.URL,
-		Interval:            input.Interval,
-		Timeout:             timeout,
-		ExpectedStatusCodes: models.IntArray(input.ExpectedStatusCodes),
-		MaxResponseTime:     maxResponseTime,
-		CreatedAt:           time.Now(),
+		ID:                   uuid.New().String(),
+		URL:                  input.URL,
+		CheckType:            checkType,
+		Interval:             input.Interval,
+		Timeout:              timeout,
+		ExpectedStatusCodes:  models.IntArray(input.ExpectedStatusCodes),
+		MaxResponseTime:      maxResponseTime,
+		MinDaysValid:         minDaysValid,
+		CheckChain:           checkChain,
+		CheckDomainMatch:     checkDomainMatch,
+		AcceptableTLSVersions: acceptableTLSVersions,
+		CreatedAt:            time.Now(),
 	}
 	if err := models.DB.Create(&ep).Error; err != nil {
 		if errors.Is(err, models.ErrInvalidEndpoint) {
@@ -148,4 +211,21 @@ func listEndpointStatuses(c *fiber.Ctx) error {
 	var statuses []models.Status
 	models.DB.Where("endpoint_id = ?", id).Order("checked_at desc").Find(&statuses)
 	return c.JSON(statuses)
+}
+
+func listSSLStatuses(c *fiber.Ctx) error {
+	var sslStatuses []models.SSLStatus
+	models.DB.Order("checked_at desc").Find(&sslStatuses)
+	return c.JSON(sslStatuses)
+}
+
+func listEndpointSSLStatuses(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if id == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "endpoint id required"})
+	}
+
+	var sslStatuses []models.SSLStatus
+	models.DB.Where("endpoint_id = ?", id).Order("checked_at desc").Find(&sslStatuses)
+	return c.JSON(sslStatuses)
 }

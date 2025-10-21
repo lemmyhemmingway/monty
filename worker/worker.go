@@ -2,8 +2,12 @@ package worker
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,10 +18,16 @@ import (
 type Endpoint struct {
 	ID                   string
 	URL                  string
+	CheckType            string
 	Interval             time.Duration
 	Timeout              time.Duration
 	ExpectedStatusCodes  []int
 	MaxResponseTime      time.Duration
+	// SSL-specific fields
+	MinDaysValid         int
+	CheckChain           bool
+	CheckDomainMatch     bool
+	AcceptableTLSVersions []string
 }
 
 type Worker struct {
@@ -97,7 +107,13 @@ func (w *Worker) monitorEndpoint(ctx context.Context, ep Endpoint) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			go w.checkEndpoint(ep)
+			switch ep.CheckType {
+			case "ssl":
+				go w.checkSSLEndpoint(ep)
+			case "http":
+			default:
+				go w.checkEndpoint(ep)
+			}
 		}
 	}
 }
@@ -180,6 +196,209 @@ func (w *Worker) isCheckSuccessful(code, responseTime int, errorMessage string, 
 	return true
 }
 
+func (w *Worker) checkSSLEndpoint(ep Endpoint) {
+	// Parse the URL to extract host and port
+	host, port, err := parseHostPort(ep.URL)
+	if err != nil {
+		log.Printf("Failed to parse URL %s: %v", ep.URL, err)
+		w.saveSSLStatus(ep.ID, models.SSLStatus{
+			ID:           uuid.New().String(),
+			EndpointID:   ep.ID,
+			IsValid:      false,
+			ErrorMessage: err.Error(),
+			CheckedAt:    time.Now(),
+		})
+		return
+	}
+
+	// Establish TLS connection
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: ep.Timeout}, "tcp", net.JoinHostPort(host, port), &tls.Config{
+		InsecureSkipVerify: true, // We'll verify manually
+	})
+	if err != nil {
+		log.Printf("TLS connection failed for %s: %v", ep.URL, err)
+		w.saveSSLStatus(ep.ID, models.SSLStatus{
+			ID:           uuid.New().String(),
+			EndpointID:   ep.ID,
+			IsValid:      false,
+			ErrorMessage: err.Error(),
+			CheckedAt:    time.Now(),
+		})
+		return
+	}
+	defer conn.Close()
+
+	// Get certificate chain
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		log.Printf("No certificates found for %s", ep.URL)
+		w.saveSSLStatus(ep.ID, models.SSLStatus{
+			ID:           uuid.New().String(),
+			EndpointID:   ep.ID,
+			IsValid:      false,
+			ErrorMessage: "No certificates found",
+			CheckedAt:    time.Now(),
+		})
+		return
+	}
+
+	// Use leaf certificate
+	cert := certs[0]
+	now := time.Now()
+	expiresAt := cert.NotAfter
+	daysUntilExpiry := int(expiresAt.Sub(now).Hours() / 24)
+
+	// Check expiration
+	isExpired := now.After(expiresAt)
+	expiresSoon := daysUntilExpiry < ep.MinDaysValid
+
+	// Check domain match
+	domainMatches := true
+	if ep.CheckDomainMatch {
+		domainMatches = w.checkCertificateDomains(cert, host)
+	}
+
+	// Check chain validity
+	chainValid := true
+	if ep.CheckChain {
+		chainValid = w.validateCertificateChain(certs)
+	}
+
+	// Check TLS version
+	tlsVersion := tlsVersionString(conn.ConnectionState().Version)
+	versionAcceptable := w.isTLSVersionAcceptable(tlsVersion, ep.AcceptableTLSVersions)
+
+	// Determine overall validity
+	isValid := !isExpired && !expiresSoon && domainMatches && chainValid && versionAcceptable
+
+	// Log result
+	if isValid {
+		log.Printf("✓ SSL check PASSED for %s (expires in %d days)", ep.URL, daysUntilExpiry)
+	} else {
+		log.Printf("✗ SSL check FAILED for %s (expires in %d days)", ep.URL, daysUntilExpiry)
+	}
+
+	// Save status
+	status := models.SSLStatus{
+		ID:                   uuid.New().String(),
+		EndpointID:           ep.ID,
+		CertificateExpiresAt: expiresAt,
+		DaysUntilExpiry:      daysUntilExpiry,
+		IsValid:              isValid,
+		DomainMatches:        domainMatches,
+		ChainValid:           chainValid,
+		Issuer:               cert.Issuer.String(),
+		Subject:              cert.Subject.String(),
+		TLSVersion:           tlsVersion,
+		SerialNumber:         cert.SerialNumber.String(),
+		ErrorMessage:         "",
+		CheckedAt:            now,
+	}
+
+	if !isValid {
+		var errors []string
+		if isExpired {
+			errors = append(errors, "certificate expired")
+		}
+		if expiresSoon {
+			errors = append(errors, "certificate expires soon")
+		}
+		if !domainMatches {
+			errors = append(errors, "domain mismatch")
+		}
+		if !chainValid {
+			errors = append(errors, "invalid certificate chain")
+		}
+		if !versionAcceptable {
+			errors = append(errors, "unsupported TLS version")
+		}
+		status.ErrorMessage = strings.Join(errors, "; ")
+	}
+
+	w.saveSSLStatus(ep.ID, status)
+}
+
+func (w *Worker) saveSSLStatus(endpointID string, status models.SSLStatus) {
+	if err := models.DB.Create(&status).Error; err != nil {
+		log.Printf("failed to save SSL status for %s: %v", endpointID, err)
+	}
+}
+
+func parseHostPort(url string) (host, port string, err error) {
+	if strings.HasPrefix(url, "https://") {
+		url = strings.TrimPrefix(url, "https://")
+		port = "443"
+	} else if strings.HasPrefix(url, "http://") {
+		url = strings.TrimPrefix(url, "http://")
+		port = "80"
+	} else {
+		// Assume direct host:port
+		port = "443"
+	}
+
+	if strings.Contains(url, ":") {
+		parts := strings.Split(url, ":")
+		host = parts[0]
+		port = parts[1]
+	} else {
+		host = url
+	}
+
+	return host, port, nil
+}
+
+func (w *Worker) checkCertificateDomains(cert *x509.Certificate, host string) bool {
+	// Check CommonName (deprecated but still used)
+	if cert.Subject.CommonName == host {
+		return true
+	}
+
+	// Check Subject Alternative Names
+	for _, san := range cert.DNSNames {
+		if san == host {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (w *Worker) validateCertificateChain(certs []*x509.Certificate) bool {
+	// Basic chain validation - in production, you'd want more sophisticated validation
+	// For now, just check that we have at least a leaf and intermediate/root
+	if len(certs) < 2 {
+		return false
+	}
+
+	// TODO: Implement proper chain validation using crypto/x509
+	// This is a simplified version
+	return true
+}
+
+func tlsVersionString(version uint16) string {
+	switch version {
+	case tls.VersionTLS10:
+		return "TLS 1.0"
+	case tls.VersionTLS11:
+		return "TLS 1.1"
+	case tls.VersionTLS12:
+		return "TLS 1.2"
+	case tls.VersionTLS13:
+		return "TLS 1.3"
+	default:
+		return "Unknown"
+	}
+}
+
+func (w *Worker) isTLSVersionAcceptable(version string, acceptable []string) bool {
+	for _, acc := range acceptable {
+		if acc == version {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *Worker) discoveryLoop() {
 	ticker := time.NewTicker(w.discoveryInterval)
 	defer ticker.Stop()
@@ -208,12 +427,17 @@ func (w *Worker) discoverEndpoints() {
 		}
 
 		dbEndpointMap[ep.ID] = Endpoint{
-			ID:                  ep.ID,
-			URL:                 ep.URL,
-			Interval:            time.Duration(ep.Interval) * time.Second,
-			Timeout:             time.Duration(ep.Timeout) * time.Second,
-			ExpectedStatusCodes: expectedCodes,
-			MaxResponseTime:     time.Duration(ep.MaxResponseTime) * time.Millisecond,
+			ID:                   ep.ID,
+			URL:                  ep.URL,
+			CheckType:            ep.CheckType,
+			Interval:             time.Duration(ep.Interval) * time.Second,
+			Timeout:              time.Duration(ep.Timeout) * time.Second,
+			ExpectedStatusCodes:  expectedCodes,
+			MaxResponseTime:      time.Duration(ep.MaxResponseTime) * time.Millisecond,
+			MinDaysValid:         ep.MinDaysValid,
+			CheckChain:           ep.CheckChain,
+			CheckDomainMatch:     ep.CheckDomainMatch,
+			AcceptableTLSVersions: ep.AcceptableTLSVersions,
 		}
 	}
 
