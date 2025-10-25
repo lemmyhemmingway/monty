@@ -18,6 +18,7 @@ type EndpointWithUptime struct {
 func RegisterEndpoints(app *fiber.App) {
 	app.Get("/endpoints", listEndpoints)
 	app.Post("/endpoints", createEndpoint)
+	app.Delete("/endpoints/:id", deleteEndpoint)
 	app.Get("/endpoint-urls", listEndpointURLs)
 	app.Get("/statuses", listStatuses)
 	app.Get("/endpoints/:id/statuses", listEndpointStatuses)
@@ -194,6 +195,30 @@ func createEndpoint(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not create endpoint"})
 	}
 	return c.Status(fiber.StatusCreated).JSON(ep)
+}
+
+func deleteEndpoint(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if id == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "endpoint id required"})
+	}
+
+	// Check if endpoint exists
+	var ep models.Endpoint
+	if err := models.DB.First(&ep, "id = ?", id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "endpoint not found"})
+	}
+
+	// Delete the endpoint from database
+	if err := models.DB.Delete(&ep).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not delete endpoint"})
+	}
+
+	// Also delete associated statuses and SSL statuses
+	models.DB.Where("endpoint_id = ?", id).Delete(&models.Status{})
+	models.DB.Where("endpoint_id = ?", id).Delete(&models.SSLStatus{})
+
+	return c.JSON(fiber.Map{"message": "endpoint deleted successfully"})
 }
 
 func listStatuses(c *fiber.Ctx) error {

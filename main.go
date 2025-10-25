@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/template/html/v2"
 	"github.com/monty/handlers"
 	"github.com/monty/models"
 	"github.com/monty/worker"
@@ -15,10 +16,14 @@ func main() {
 		panic(err)
 	}
 
-	app := fiber.New()
+	engine := html.New("./templates", ".html")
+	app := fiber.New(fiber.Config{
+		Views: engine,
+	})
 
 	handlers.RegisterHealth(app)
 	handlers.RegisterEndpoints(app)
+	handlers.RegisterDashboard(app)
 
 	var eps []models.Endpoint
 	models.DB.Find(&eps)

@@ -43,18 +43,23 @@ func (a *IntArray) Scan(value interface{}) error {
 var ErrInvalidEndpoint = errors.New("endpoint requires a non-empty url and positive interval")
 
 type Endpoint struct {
-	ID                   string      `gorm:"primaryKey" json:"id"`
-	URL                  string      `gorm:"not null" json:"url"`
-	CheckType            string      `gorm:"default:http" json:"check_type"` // "http", "ssl", "domain"
-	Interval             int         `gorm:"not null" json:"interval"` // seconds
-	Timeout              int         `gorm:"default:30" json:"timeout"` // seconds, default 30
-	ExpectedStatusCodes  IntArray   `gorm:"type:json" json:"expected_status_codes"` // empty means 200-299
-	MaxResponseTime      int         `gorm:"default:5000" json:"max_response_time"` // milliseconds, default 5000
-	// SSL-specific fields
-	MinDaysValid         int         `gorm:"default:30" json:"min_days_valid"` // days, default 30
-	CheckChain           bool        `gorm:"default:true" json:"check_chain"` // default true
-	CheckDomainMatch     bool        `gorm:"default:true" json:"check_domain_match"` // default true
-	AcceptableTLSVersions StringArray `gorm:"type:json" json:"acceptable_tls_versions"` // e.g., ["TLS 1.2", "TLS 1.3"]
+ID                   string      `gorm:"primaryKey" json:"id"`
+URL                  string      `gorm:"not null" json:"url"`
+CheckType            string      `gorm:"default:http" json:"check_type"` // "http", "ssl", "dns", "ping", "tcp"
+Interval             int         `gorm:"not null" json:"interval"` // seconds
+Timeout              int         `gorm:"default:30" json:"timeout"` // seconds, default 30
+ExpectedStatusCodes  IntArray   `gorm:"type:json" json:"expected_status_codes"` // empty means 200-299
+MaxResponseTime      int         `gorm:"default:5000" json:"max_response_time"` // milliseconds, default 5000
+// SSL-specific fields
+MinDaysValid         int         `gorm:"default:30" json:"min_days_valid"` // days, default 30
+CheckChain           bool        `gorm:"default:true" json:"check_chain"` // default true
+CheckDomainMatch     bool        `gorm:"default:true" json:"check_domain_match"` // default true
+AcceptableTLSVersions StringArray `gorm:"type:json" json:"acceptable_tls_versions"` // e.g., ["TLS 1.2", "TLS 1.3"]
+// DNS-specific fields
+	DNSRecordType        string      `gorm:"default:A" json:"dns_record_type"` // A, AAAA, CNAME, MX, TXT, etc.
+	ExpectedDNSAnswers   IntArray   `gorm:"type:json" json:"expected_dns_answers"` // minimum number of answers expected
+	// TCP-specific fields
+	TCPPort              int         `gorm:"default:80" json:"tcp_port"` // port to connect to
 	CreatedAt            time.Time   `json:"created_at"`
 }
 
@@ -79,14 +84,31 @@ func (e *Endpoint) BeforeSave(tx *gorm.DB) error {
 
 	// SSL-specific defaults
 	if e.CheckType == "ssl" {
-		if e.Interval == 60 { // if default interval, set to 24h for SSL
-			e.Interval = 86400
+	if e.Interval == 60 { // if default interval, set to 24h for SSL
+	e.Interval = 86400
+	}
+	if e.MinDaysValid <= 0 {
+	e.MinDaysValid = 30
+	}
+	if len(e.AcceptableTLSVersions) == 0 {
+	e.AcceptableTLSVersions = []string{"TLS 1.2", "TLS 1.3"}
+	}
+	}
+
+	// DNS-specific defaults
+	if e.CheckType == "dns" {
+		if e.DNSRecordType == "" {
+			e.DNSRecordType = "A"
 		}
-		if e.MinDaysValid <= 0 {
-			e.MinDaysValid = 30
+		if len(e.ExpectedDNSAnswers) == 0 {
+			e.ExpectedDNSAnswers = []int{1} // expect at least 1 answer
 		}
-		if len(e.AcceptableTLSVersions) == 0 {
-			e.AcceptableTLSVersions = []string{"TLS 1.2", "TLS 1.3"}
+	}
+
+	// TCP-specific defaults
+	if e.CheckType == "tcp" {
+		if e.TCPPort <= 0 {
+			e.TCPPort = 80 // default to HTTP port
 		}
 	}
 

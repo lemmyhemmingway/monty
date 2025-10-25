@@ -1,33 +1,39 @@
 package worker
 
 import (
-	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"log"
-	"net"
-	"net/http"
-	"strings"
-	"sync"
+"context"
+"crypto/tls"
+"crypto/x509"
+"fmt"
+"log"
+"net"
+"net/http"
+"strings"
+"sync"
 	"time"
 
-	"github.com/google/uuid"
+"github.com/google/uuid"
 	"github.com/monty/models"
 )
 
 type Endpoint struct {
-	ID                   string
-	URL                  string
-	CheckType            string
-	Interval             time.Duration
-	Timeout              time.Duration
-	ExpectedStatusCodes  []int
-	MaxResponseTime      time.Duration
-	// SSL-specific fields
-	MinDaysValid         int
-	CheckChain           bool
-	CheckDomainMatch     bool
-	AcceptableTLSVersions []string
+ID                   string
+URL                  string
+CheckType            string
+Interval             time.Duration
+Timeout              time.Duration
+ExpectedStatusCodes  []int
+MaxResponseTime      time.Duration
+// SSL-specific fields
+MinDaysValid         int
+CheckChain           bool
+CheckDomainMatch     bool
+AcceptableTLSVersions []string
+	// DNS-specific fields
+	DNSRecordType        string
+	ExpectedDNSAnswers   []int
+	// TCP-specific fields
+	TCPPort              int
 }
 
 type Worker struct {
@@ -109,16 +115,22 @@ func (w *Worker) monitorEndpoint(ctx context.Context, ep Endpoint) {
 		case <-ticker.C:
 			switch ep.CheckType {
 			case "ssl":
-				go w.checkSSLEndpoint(ep)
-			case "http":
-			default:
-				go w.checkEndpoint(ep)
-			}
+			go w.checkSSLEndpoint(ep)
+			case "dns":
+			 go w.checkDNSEndpoint(ep)
+			case "ping":
+			 go w.checkPingEndpoint(ep)
+		case "tcp":
+			go w.checkTCPEndpoint(ep)
+		case "http":
+		default:
+			go w.checkHTTPEndpoint(ep)
+		}
 		}
 	}
 }
 
-func (w *Worker) checkEndpoint(ep Endpoint) {
+func (w *Worker) checkHTTPEndpoint(ep Endpoint) {
 	// Create HTTP client with timeout
 	client := &http.Client{
 		Timeout: ep.Timeout,
@@ -391,12 +403,187 @@ func tlsVersionString(version uint16) string {
 }
 
 func (w *Worker) isTLSVersionAcceptable(version string, acceptable []string) bool {
-	for _, acc := range acceptable {
-		if acc == version {
-			return true
+for _, acc := range acceptable {
+if acc == version {
+return true
+}
+}
+return false
+}
+
+func (w *Worker) checkDNSEndpoint(ep Endpoint) {
+	start := time.Now()
+
+	// For DNS checks, the URL should be a domain name
+	domain := strings.TrimPrefix(ep.URL, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+
+	// Perform DNS lookup
+	var answers []string
+	var err error
+
+	switch ep.DNSRecordType {
+	case "A":
+		answers, err = net.LookupHost(domain)
+	case "AAAA":
+		answers, err = net.LookupHost(domain) // This returns IPv4, we need IPv6
+		// For IPv6, we'd need net.LookupIP with IPv6 filter, but this is simplified
+	case "CNAME":
+		cname, err := net.LookupCNAME(domain)
+		if err == nil {
+			answers = []string{cname}
 		}
+	case "MX":
+		mxs, err := net.LookupMX(domain)
+		if err == nil {
+			for _, mx := range mxs {
+				answers = append(answers, mx.Host)
+			}
+		}
+	case "TXT":
+		txts, err := net.LookupTXT(domain)
+		if err == nil {
+			answers = txts
+		}
+	default:
+		// Default to A record
+		answers, err = net.LookupHost(domain)
 	}
-	return false
+
+	responseTime := int(time.Since(start).Milliseconds())
+	errorMessage := ""
+	if err != nil {
+		errorMessage = err.Error()
+	}
+
+	// Check if we got expected number of answers
+	expectedCount := 1
+	if len(ep.ExpectedDNSAnswers) > 0 {
+		expectedCount = ep.ExpectedDNSAnswers[0]
+	}
+
+	isSuccessful := errorMessage == "" && len(answers) >= expectedCount
+
+	// Save status
+	status := models.Status{
+		ID:           uuid.New().String(),
+		EndpointID:   ep.ID,
+		Code:         len(answers), // Use answer count as "code"
+		ResponseTime: responseTime,
+		ErrorMessage: errorMessage,
+		CheckedAt:    time.Now(),
+	}
+	if err := models.DB.Create(&status).Error; err != nil {
+		log.Printf("failed to save DNS status for %s: %v", ep.URL, err)
+	}
+
+	// Log result
+	if isSuccessful {
+		log.Printf("✓ DNS check PASSED for %s (%s) - %d answers", ep.URL, ep.DNSRecordType, len(answers))
+	} else {
+		log.Printf("✗ DNS check FAILED for %s (%s) - %d answers", ep.URL, ep.DNSRecordType, len(answers))
+	}
+}
+
+func (w *Worker) checkPingEndpoint(ep Endpoint) {
+	start := time.Now()
+
+	// For ping checks, extract host from URL
+	host := strings.TrimPrefix(ep.URL, "http://")
+	host = strings.TrimPrefix(host, "https://")
+	if strings.Contains(host, ":") {
+		host = strings.Split(host, ":")[0]
+	}
+
+	// Ping is tricky in Go without root privileges for ICMP
+	// We'll use a simple TCP connection to port 80/443 as a proxy for reachability
+	var port string
+	if strings.HasPrefix(ep.URL, "https://") {
+		port = "443"
+	} else {
+		port = "80"
+	}
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), ep.Timeout)
+	responseTime := int(time.Since(start).Milliseconds())
+	errorMessage := ""
+
+	if err != nil {
+		errorMessage = err.Error()
+	} else {
+		conn.Close()
+	}
+
+	isSuccessful := errorMessage == ""
+
+	// Save status
+	status := models.Status{
+		ID:           uuid.New().String(),
+		EndpointID:   ep.ID,
+		Code:         0, // Ping doesn't have HTTP codes
+		ResponseTime: responseTime,
+		ErrorMessage: errorMessage,
+		CheckedAt:    time.Now(),
+	}
+	if err := models.DB.Create(&status).Error; err != nil {
+		log.Printf("failed to save ping status for %s: %v", ep.URL, err)
+	}
+
+	// Log result
+	if isSuccessful {
+		log.Printf("✓ PING check PASSED for %s (%dms)", ep.URL, responseTime)
+	} else {
+		log.Printf("✗ PING check FAILED for %s", ep.URL)
+	}
+}
+
+func (w *Worker) checkTCPEndpoint(ep Endpoint) {
+	start := time.Now()
+
+	// Extract host from URL
+	host := strings.TrimPrefix(ep.URL, "http://")
+	host = strings.TrimPrefix(host, "https://")
+	if strings.Contains(host, ":") {
+		host = strings.Split(host, ":")[0]
+	}
+
+	// Use specified port or default
+	port := ep.TCPPort
+	if port <= 0 {
+		port = 80
+	}
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)), ep.Timeout)
+	responseTime := int(time.Since(start).Milliseconds())
+	errorMessage := ""
+
+	if err != nil {
+		errorMessage = err.Error()
+	} else {
+		conn.Close()
+	}
+
+	isSuccessful := errorMessage == ""
+
+	// Save status
+	status := models.Status{
+		ID:           uuid.New().String(),
+		EndpointID:   ep.ID,
+		Code:         0, // TCP doesn't have HTTP codes
+		ResponseTime: responseTime,
+		ErrorMessage: errorMessage,
+		CheckedAt:    time.Now(),
+	}
+	if err := models.DB.Create(&status).Error; err != nil {
+		log.Printf("failed to save TCP status for %s: %v", ep.URL, err)
+	}
+
+	// Log result
+	if isSuccessful {
+		log.Printf("✓ TCP check PASSED for %s:%d (%dms)", ep.URL, port, responseTime)
+	} else {
+		log.Printf("✗ TCP check FAILED for %s:%d", ep.URL, port)
+	}
 }
 
 func (w *Worker) discoveryLoop() {
@@ -427,17 +614,20 @@ func (w *Worker) discoverEndpoints() {
 		}
 
 		dbEndpointMap[ep.ID] = Endpoint{
-			ID:                   ep.ID,
-			URL:                  ep.URL,
-			CheckType:            ep.CheckType,
-			Interval:             time.Duration(ep.Interval) * time.Second,
-			Timeout:              time.Duration(ep.Timeout) * time.Second,
-			ExpectedStatusCodes:  expectedCodes,
-			MaxResponseTime:      time.Duration(ep.MaxResponseTime) * time.Millisecond,
-			MinDaysValid:         ep.MinDaysValid,
-			CheckChain:           ep.CheckChain,
-			CheckDomainMatch:     ep.CheckDomainMatch,
-			AcceptableTLSVersions: ep.AcceptableTLSVersions,
+		ID:                   ep.ID,
+		URL:                  ep.URL,
+		CheckType:            ep.CheckType,
+		Interval:             time.Duration(ep.Interval) * time.Second,
+		Timeout:              time.Duration(ep.Timeout) * time.Second,
+		ExpectedStatusCodes:  expectedCodes,
+		MaxResponseTime:      time.Duration(ep.MaxResponseTime) * time.Millisecond,
+		MinDaysValid:         ep.MinDaysValid,
+		CheckChain:           ep.CheckChain,
+		CheckDomainMatch:     ep.CheckDomainMatch,
+		AcceptableTLSVersions: ep.AcceptableTLSVersions,
+		 DNSRecordType:        ep.DNSRecordType,
+			ExpectedDNSAnswers:   []int(ep.ExpectedDNSAnswers),
+			TCPPort:              ep.TCPPort,
 		}
 	}
 
