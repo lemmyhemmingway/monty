@@ -13,12 +13,12 @@ func showDashboard(c *fiber.Ctx) error {
 	var endpoints []models.Endpoint
 	models.DB.Find(&endpoints)
 
-	var response []EndpointWithUptime
+	var response []EndpointWithStatus
 	for _, ep := range endpoints {
-		uptime := calculateUptime(ep.ID)
-		response = append(response, EndpointWithUptime{
-			Endpoint: ep,
-			Uptime:   uptime,
+		status := calculateStatus(ep)
+		response = append(response, EndpointWithStatus{
+			Endpoint:     ep,
+			StatusString: status,
 		})
 	}
 

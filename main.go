@@ -21,6 +21,8 @@ func main() {
 		Views: engine,
 	})
 
+	app.Static("/static", "./static")
+
 	handlers.RegisterHealth(app)
 	handlers.RegisterEndpoints(app)
 	handlers.RegisterDashboard(app)
@@ -38,8 +40,16 @@ func main() {
 		MaxResponseTime:     time.Duration(ep.MaxResponseTime) * time.Millisecond,
 	})
 	}
+	// Start server in a goroutine
+	go func() {
+		app.Listen(":3000")
+	}()
+
+	// Start worker after a short delay to ensure server is up
+	time.Sleep(1 * time.Second)
 	w := worker.NewWorker(1 * time.Minute) // Check for new endpoints every minute
 	w.Start(workerEps)
 
-	app.Listen(":3000")
+	// Wait forever
+	select {}
 }

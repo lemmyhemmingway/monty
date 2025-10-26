@@ -112,5 +112,12 @@ func (e *Endpoint) BeforeSave(tx *gorm.DB) error {
 		}
 	}
 
+	// Domain-specific defaults
+	if e.CheckType == "domain" {
+		if e.Interval == 60 { // if default interval, set to 24h for domain
+			e.Interval = 86400
+		}
+	}
+
 	return nil
 }

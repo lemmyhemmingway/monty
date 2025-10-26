@@ -2,17 +2,19 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/monty/models"
+	"github.com/monty/worker"
 )
 
-type EndpointWithUptime struct {
+type EndpointWithStatus struct {
 	models.Endpoint
-	Uptime float64 `json:"uptime"`
+	StatusString string `json:"status"`
 }
 
 func RegisterEndpoints(app *fiber.App) {
@@ -25,6 +27,9 @@ func RegisterEndpoints(app *fiber.App) {
 	// SSL status endpoints
 	app.Get("/ssl-statuses", listSSLStatuses)
 	app.Get("/endpoints/:id/ssl-statuses", listEndpointSSLStatuses)
+	// Domain status endpoints
+	app.Get("/domain-statuses", listDomainStatuses)
+	app.Get("/endpoints/:id/domain-statuses", listEndpointDomainStatuses)
 }
 
 func calculateUptime(endpointID string) float64 {
@@ -88,16 +93,39 @@ func calculateSSLUptime(endpointID string) float64 {
 	return (float64(successful) / float64(len(sslStatuses))) * 100
 }
 
+func calculateStatus(ep models.Endpoint) string {
+	if ep.CheckType == "ssl" {
+		var status models.SSLStatus
+		if err := models.DB.Where("endpoint_id = ?", ep.ID).Order("checked_at desc").First(&status).Error; err != nil {
+			return "No SSL checks yet"
+		}
+		if status.IsValid {
+			return "Valid"
+		} else {
+			return "Invalid"
+		}
+	} else if ep.CheckType == "domain" {
+		var status models.DomainStatus
+		if err := models.DB.Where("endpoint_id = ?", ep.ID).Order("checked_at desc").First(&status).Error; err != nil {
+			return "No domain checks yet"
+		}
+		return fmt.Sprintf("%d days", status.DaysUntilExpiry)
+	} else {
+		uptime := calculateUptime(ep.ID)
+		return fmt.Sprintf("%.1f%%", uptime)
+	}
+}
+
 func listEndpoints(c *fiber.Ctx) error {
 	var endpoints []models.Endpoint
 	models.DB.Find(&endpoints)
 
-	var response []EndpointWithUptime
+	var response []EndpointWithStatus
 	for _, ep := range endpoints {
-		uptime := calculateUptime(ep.ID)
-		response = append(response, EndpointWithUptime{
-			Endpoint: ep,
-			Uptime:   uptime,
+		status := calculateStatus(ep)
+		response = append(response, EndpointWithStatus{
+			Endpoint:     ep,
+			StatusString: status,
 		})
 	}
 
@@ -194,6 +222,43 @@ func createEndpoint(c *fiber.Ctx) error {
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not create endpoint"})
 	}
+
+	// Perform immediate check for the new endpoint
+	go func() {
+		workerEp := worker.Endpoint{
+			ID:                   ep.ID,
+			URL:                  ep.URL,
+			CheckType:            ep.CheckType,
+			Interval:             time.Duration(ep.Interval) * time.Second,
+			Timeout:              time.Duration(ep.Timeout) * time.Second,
+			ExpectedStatusCodes:  []int(ep.ExpectedStatusCodes),
+			MaxResponseTime:      time.Duration(ep.MaxResponseTime) * time.Millisecond,
+			MinDaysValid:         ep.MinDaysValid,
+			CheckChain:           ep.CheckChain,
+			CheckDomainMatch:     ep.CheckDomainMatch,
+			AcceptableTLSVersions: ep.AcceptableTLSVersions,
+			DNSRecordType:        ep.DNSRecordType,
+			ExpectedDNSAnswers:   []int(ep.ExpectedDNSAnswers),
+			TCPPort:              ep.TCPPort,
+		}
+		// Create a dummy worker to use its methods
+		w := worker.NewWorker(1 * time.Minute)
+		switch workerEp.CheckType {
+		case "ssl":
+			w.CheckSSLEndpoint(workerEp)
+		case "dns":
+			w.CheckDNSEndpoint(workerEp)
+		case "domain":
+			w.CheckDomainEndpoint(workerEp)
+		case "ping":
+			w.CheckPingEndpoint(workerEp)
+		case "tcp":
+			w.CheckTCPEndpoint(workerEp)
+		default:
+			w.CheckHTTPEndpoint(workerEp)
+		}
+	}()
+
 	return c.Status(fiber.StatusCreated).JSON(ep)
 }
 
@@ -214,9 +279,10 @@ func deleteEndpoint(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not delete endpoint"})
 	}
 
-	// Also delete associated statuses and SSL statuses
+	// Also delete associated statuses, SSL statuses, and domain statuses
 	models.DB.Where("endpoint_id = ?", id).Delete(&models.Status{})
 	models.DB.Where("endpoint_id = ?", id).Delete(&models.SSLStatus{})
+	models.DB.Where("endpoint_id = ?", id).Delete(&models.DomainStatus{})
 
 	return c.JSON(fiber.Map{"message": "endpoint deleted successfully"})
 }
@@ -253,4 +319,21 @@ func listEndpointSSLStatuses(c *fiber.Ctx) error {
 	var sslStatuses []models.SSLStatus
 	models.DB.Where("endpoint_id = ?", id).Order("checked_at desc").Find(&sslStatuses)
 	return c.JSON(sslStatuses)
+}
+
+func listDomainStatuses(c *fiber.Ctx) error {
+	var domainStatuses []models.DomainStatus
+	models.DB.Order("checked_at desc").Find(&domainStatuses)
+	return c.JSON(domainStatuses)
+}
+
+func listEndpointDomainStatuses(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if id == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "endpoint id required"})
+	}
+
+	var domainStatuses []models.DomainStatus
+	models.DB.Where("endpoint_id = ?", id).Order("checked_at desc").Find(&domainStatuses)
+	return c.JSON(domainStatuses)
 }

@@ -4,22 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monty Dashboard</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        h1 { color: #333; }
-        form { margin-bottom: 20px; border: 1px solid #ccc; padding: 10px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        .uptime { font-weight: bold; }
-        .uptime.high { color: green; }
-        .uptime.medium { color: orange; }
-        .uptime.low { color: red; }
-        .ssl-fields, .dns-fields, .tcp-fields { display: none; }
-        .check-type-ssl:checked ~ .ssl-fields { display: block; }
-        .check-type-dns:checked ~ .dns-fields { display: block; }
-        .check-type-tcp:checked ~ .tcp-fields { display: block; }
-    </style>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
 </head>
 <body>
     <h1>Monty Health Monitoring Dashboard</h1>
@@ -31,6 +16,7 @@
             <input type="radio" name="check_type" value="http" checked> HTTP
             <input type="radio" name="check_type" value="ssl" class="check-type"> SSL
             <input type="radio" name="check_type" value="dns" class="check-type"> DNS
+            <input type="radio" name="check_type" value="domain" class="check-type"> Domain
             <input type="radio" name="check_type" value="ping" class="check-type"> Ping
             <input type="radio" name="check_type" value="tcp" class="check-type"> TCP
         </label><br>
@@ -86,14 +72,16 @@
                 <td>{{.URL}}</td>
                 <td>{{.CheckType}}</td>
                 <td>{{.Interval}}s</td>
-                <td class="uptime {{if ge .Uptime 95.0}}high{{else if ge .Uptime 80.0}}medium{{else}}low{{end}}">
-                    {{printf "%.1f" .Uptime}}%
+                <td class="status {{if eq .StatusString "Valid"}}valid{{else if eq .StatusString "Invalid"}}invalid{{else if or (strings.Contains .StatusString "days") (strings.Contains .StatusString "%")}}uptime{{else}}unknown{{end}}">
+                    {{.StatusString}}
                 </td>
                 <td>
                 {{if eq .CheckType "http"}}
                 <a href="/endpoints/{{.ID}}/statuses">Statuses</a>
                 {{else if eq .CheckType "ssl"}}
                 <a href="/endpoints/{{.ID}}/ssl-statuses">SSL Statuses</a>
+                {{else if eq .CheckType "domain"}}
+                <a href="/endpoints/{{.ID}}/domain-statuses">Domain Statuses</a>
                 {{else}}
                     <a href="/endpoints/{{.ID}}/statuses">Statuses</a>
                      {{end}}
@@ -104,103 +92,6 @@
         </tbody>
     </table>
 
-    <script>
-        // Toggle fields based on check type
-        document.querySelectorAll('input[name="check_type"]').forEach(radio => {
-        radio.addEventListener('change', function() {
-        const sslFields = document.querySelector('.ssl-fields');
-        const dnsFields = document.querySelector('.dns-fields');
-        const tcpFields = document.querySelector('.tcp-fields');
-        const httpFields = document.querySelector('.http-fields');
-
-        // Hide all fields first
-        sslFields.style.display = 'none';
-        dnsFields.style.display = 'none';
-        tcpFields.style.display = 'none';
-            httpFields.style.display = 'none';
-
-                // Show relevant fields
-                switch (this.value) {
-                    case 'ssl':
-                        sslFields.style.display = 'block';
-                        break;
-                    case 'dns':
-                        dnsFields.style.display = 'block';
-                        break;
-                    case 'tcp':
-                        tcpFields.style.display = 'block';
-                        break;
-                    case 'http':
-                    default:
-                        httpFields.style.display = 'block';
-                        break;
-                }
-            });
-        });
-
-        // Submit form as JSON
-        document.getElementById('endpoint-form').addEventListener('submit', function(e) {
-            e.preventDefault();
-            const formData = new FormData(this);
-            const data = {};
-
-            for (let [key, value] of formData) {
-            if (key === 'expected_status_codes' || key === 'acceptable_tls_versions') {
-            data[key] = value.split(',').map(s => s.trim()).filter(s => s).map(s => key === 'expected_status_codes' ? parseInt(s) : s);
-            } else if (key === 'expected_dns_answers') {
-            data[key] = [parseInt(value)]; // ExpectedDNSAnswers is an array
-            } else if (key === 'interval' || key === 'timeout' || key === 'max_response_time' || key === 'min_days_valid' || key === 'tcp_port') {
-            data[key] = parseInt(value);
-            } else if (key === 'check_chain' || key === 'check_domain_match') {
-            data[key] = this.querySelector(`input[name="${key}"]`).checked;
-            } else {
-                    data[key] = value;
-                }
-            }
-
-            fetch('/endpoints', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(data),
-            })
-            .then(response => response.json())
-            .then(result => {
-                if (result.error) {
-                    alert('Error: ' + result.error);
-                } else {
-                    alert('Endpoint added successfully!');
-                    location.reload();
-                }
-            })
-            .catch(error => {
-                alert('Error adding endpoint: ' + error);
-            });
-        });
-
-        // Delete endpoint function
-        function deleteEndpoint(id) {
-            if (!confirm('Are you sure you want to delete this endpoint? This action cannot be undone.')) {
-                return;
-            }
-
-            fetch(`/endpoints/${id}`, {
-                method: 'DELETE',
-            })
-            .then(response => response.json())
-            .then(result => {
-                if (result.error) {
-                    alert('Error: ' + result.error);
-                } else {
-                    alert('Endpoint deleted successfully!');
-                    location.reload();
-                }
-            })
-            .catch(error => {
-                alert('Error deleting endpoint: ' + error);
-            });
-        }
-    </script>
+    <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

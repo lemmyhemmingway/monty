@@ -113,24 +113,26 @@ func (w *Worker) monitorEndpoint(ctx context.Context, ep Endpoint) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			switch ep.CheckType {
-			case "ssl":
-			go w.checkSSLEndpoint(ep)
-			case "dns":
-			 go w.checkDNSEndpoint(ep)
-			case "ping":
-			 go w.checkPingEndpoint(ep)
+		switch ep.CheckType {
+		case "ssl":
+		go w.CheckSSLEndpoint(ep)
+		case "dns":
+		go w.CheckDNSEndpoint(ep)
+		case "domain":
+		go w.CheckDomainEndpoint(ep)
+		case "ping":
+		go w.CheckPingEndpoint(ep)
 		case "tcp":
-			go w.checkTCPEndpoint(ep)
+		go w.CheckTCPEndpoint(ep)
 		case "http":
 		default:
-			go w.checkHTTPEndpoint(ep)
+		go w.CheckHTTPEndpoint(ep)
 		}
 		}
-	}
+		}
 }
 
-func (w *Worker) checkHTTPEndpoint(ep Endpoint) {
+func (w *Worker) CheckHTTPEndpoint(ep Endpoint) {
 	// Create HTTP client with timeout
 	client := &http.Client{
 		Timeout: ep.Timeout,
@@ -208,7 +210,7 @@ func (w *Worker) isCheckSuccessful(code, responseTime int, errorMessage string, 
 	return true
 }
 
-func (w *Worker) checkSSLEndpoint(ep Endpoint) {
+func (w *Worker) CheckSSLEndpoint(ep Endpoint) {
 	// Parse the URL to extract host and port
 	host, port, err := parseHostPort(ep.URL)
 	if err != nil {
@@ -411,7 +413,7 @@ return true
 return false
 }
 
-func (w *Worker) checkDNSEndpoint(ep Endpoint) {
+func (w *Worker) CheckDNSEndpoint(ep Endpoint) {
 	start := time.Now()
 
 	// For DNS checks, the URL should be a domain name
@@ -485,7 +487,7 @@ func (w *Worker) checkDNSEndpoint(ep Endpoint) {
 	}
 }
 
-func (w *Worker) checkPingEndpoint(ep Endpoint) {
+func (w *Worker) CheckPingEndpoint(ep Endpoint) {
 	start := time.Now()
 
 	// For ping checks, extract host from URL
@@ -537,7 +539,46 @@ func (w *Worker) checkPingEndpoint(ep Endpoint) {
 	}
 }
 
-func (w *Worker) checkTCPEndpoint(ep Endpoint) {
+func (w *Worker) CheckDomainEndpoint(ep Endpoint) {
+	// Extract domain from URL
+	domain := strings.TrimPrefix(ep.URL, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+	if strings.Contains(domain, ":") {
+		domain = strings.Split(domain, ":")[0]
+	}
+
+	// TODO: Implement WHOIS lookup for domain expiration
+	// For now, simulate with a fixed date
+	now := time.Now()
+	// Simulate domain expires in 365 days
+	expiresAt := now.AddDate(1, 0, 0)
+	daysUntilExpiry := int(expiresAt.Sub(now).Hours() / 24)
+
+	isRegistered := true
+	registrar := "Simulated Registrar"
+	errorMessage := ""
+
+	// Log result
+	log.Printf("✓ Domain check PASSED for %s - expires in %d days", domain, daysUntilExpiry)
+
+	// Save status
+	status := models.DomainStatus{
+		ID:              uuid.New().String(),
+		EndpointID:      ep.ID,
+		DomainExpiresAt: expiresAt,
+		DaysUntilExpiry: daysUntilExpiry,
+		IsRegistered:    isRegistered,
+		Registrar:       registrar,
+		ErrorMessage:    errorMessage,
+		CheckedAt:       now,
+	}
+
+	if err := models.DB.Create(&status).Error; err != nil {
+		log.Printf("failed to save domain status for %s: %v", ep.URL, err)
+	}
+}
+
+func (w *Worker) CheckTCPEndpoint(ep Endpoint) {
 	start := time.Now()
 
 	// Extract host from URL

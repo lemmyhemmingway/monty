@@ -1,0 +1,11 @@
+body { font-family: Arial, sans-serif; margin: 20px; }
+h1 { color: #333; }
+form { margin-bottom: 20px; border: 1px solid #ccc; padding: 10px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+th { background-color: #f2f2f2; }
+.status { font-weight: bold; }
+.status.valid { color: green; }
+.status.invalid { color: red; }
+.status.uptime { color: blue; }
+.ssl-fields, .dns-fields, .tcp-fields { display: none; }
