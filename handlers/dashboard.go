@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/monty/models"
 )
@@ -13,16 +15,20 @@ func showDashboard(c *fiber.Ctx) error {
 	var endpoints []models.Endpoint
 	models.DB.Find(&endpoints)
 
-	var response []EndpointWithStatus
-	for _, ep := range endpoints {
+	// Group endpoints by type
+	grouped := make(map[string][]EndpointWithStatus)
+	for i, ep := range endpoints {
 		status := calculateStatus(ep)
-		response = append(response, EndpointWithStatus{
+		item := EndpointWithStatus{
 			Endpoint:     ep,
 			StatusString: status,
-		})
+		}
+		// Add sequential ID
+		item.Endpoint.ID = fmt.Sprintf("%d", i+1)
+		grouped[ep.CheckType] = append(grouped[ep.CheckType], item)
 	}
 
 	return c.Render("dashboard", fiber.Map{
-		"endpoints": response,
+		"groupedEndpoints": grouped,
 	})
 }

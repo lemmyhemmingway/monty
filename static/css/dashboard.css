@@ -9,3 +9,10 @@ th { background-color: #f2f2f2; }
 .status.invalid { color: red; }
 .status.uptime { color: blue; }
 .ssl-fields, .dns-fields, .tcp-fields { display: none; }
+
+/* Tabs */
+.tabs { margin-bottom: 20px; }
+.tab-button { padding: 10px 20px; border: none; background: #f1f1f1; cursor: pointer; }
+.tab-button.active { background: #007bff; color: white; }
+.tab-button:hover { background: #e9ecef; }
+.tab-button.active:hover { background: #0056b3; }

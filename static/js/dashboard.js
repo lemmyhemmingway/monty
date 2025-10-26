@@ -75,6 +75,20 @@ document.getElementById('endpoint-form').addEventListener('submit', function(e) 
     });
 });
 
+// Tab functionality
+function showTab(type) {
+    // Update active tab button
+    document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+    event.target.classList.add('active');
+
+    // Show/hide tab content
+    const contents = document.querySelectorAll('.tab-content');
+    contents.forEach(content => {
+        content.style.display = 'none';
+    });
+    document.getElementById(type).style.display = 'block';
+}
+
 // Delete endpoint function
 function deleteEndpoint(id) {
     if (!confirm('Are you sure you want to delete this endpoint? This action cannot be undone.')) {

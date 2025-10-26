@@ -19,6 +19,8 @@ func main() {
 
 	engine := html.New("./templates", ".html")
 	engine.AddFunc("contains", strings.Contains)
+	engine.AddFunc("add", func(a, b int) int { return a + b })
+	engine.AddFunc("inc", func(a int) int { return a + 1 })
 	app := fiber.New(fiber.Config{
 		Views: engine,
 	})
