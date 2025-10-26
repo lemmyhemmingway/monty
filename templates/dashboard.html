@@ -72,7 +72,7 @@
                 <td>{{.URL}}</td>
                 <td>{{.CheckType}}</td>
                 <td>{{.Interval}}s</td>
-                <td class="status {{if eq .StatusString "Valid"}}valid{{else if eq .StatusString "Invalid"}}invalid{{else if or (strings.Contains .StatusString "days") (strings.Contains .StatusString "%")}}uptime{{else}}unknown{{end}}">
+                <td class="status {{if eq .StatusString "Valid"}}valid{{else if eq .StatusString "Invalid"}}invalid{{else if or (contains .StatusString "days") (contains .StatusString "%")}}uptime{{else}}unknown{{end}}">
                     {{.StatusString}}
                 </td>
                 <td>

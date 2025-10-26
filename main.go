@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -17,6 +18,7 @@ func main() {
 	}
 
 	engine := html.New("./templates", ".html")
+	engine.AddFunc("contains", strings.Contains)
 	app := fiber.New(fiber.Config{
 		Views: engine,
 	})
