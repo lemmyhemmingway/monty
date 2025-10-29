@@ -1,4 +1,4 @@
-import { Typography, Box, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Chip, CircularProgress } from '@mui/material'
+import { Typography, Box, Card, CardContent, LinearProgress } from '@mui/material'
 import { useEffect } from 'react'
 import { useEndpointsStore } from '../stores/endpointsStore'
 
@@ -11,57 +11,26 @@ const Endpoints: React.FC = () => {
   }, [fetchEndpoints])
 
   if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-        <CircularProgress />
-      </Box>
-    )
+    return <Typography>Loading...</Typography>
   }
 
   if (error) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <Typography color="error">{error}</Typography>
-      </Box>
-    )
+    return <Typography color="error">{error}</Typography>
   }
 
   return (
-    <Box sx={{ height: '100%', overflow: 'auto' }}>
-      <TableContainer component={Paper} sx={{ width: '100%', m: 0, mr: 6, height: '100%' }}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>URL</TableCell>
-              <TableCell>Interval</TableCell>
-              <TableCell>Timeout</TableCell>
-              <TableCell>Uptime</TableCell>
-              <TableCell>Status</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {endpoints.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} align="center">
-                  No endpoints found
-                </TableCell>
-              </TableRow>
-            ) : (
-              endpoints.map((endpoint) => (
-                <TableRow key={endpoint.id}>
-                  <TableCell>{endpoint.url}</TableCell>
-                  <TableCell>{endpoint.interval}s</TableCell>
-                  <TableCell>{endpoint.timeout}s</TableCell>
-                  <TableCell>{endpoint.uptime ? `${endpoint.uptime.toFixed(1)}%` : 'N/A'}</TableCell>
-                  <TableCell>
-                    <Chip label="Unknown" color="default" />
-                  </TableCell>
-                </TableRow>
-              ))
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, p: 2 }}>
+      {endpoints.map((endpoint) => (
+        <Card key={endpoint.id} sx={{ minWidth: 300 }}>
+          <CardContent>
+            <Typography variant="h6">{endpoint.url}</Typography>
+            <Typography>Uptime: {endpoint.uptime ? `${endpoint.uptime.toFixed(1)}%` : 'N/A'}</Typography>
+            {endpoint.uptime && (
+              <LinearProgress variant="determinate" value={endpoint.uptime} sx={{ mt: 1 }} />
             )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+          </CardContent>
+        </Card>
+      ))}
     </Box>
   )
 }
