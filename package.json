@@ -1,0 +1,15 @@
+{
+  "name": "monty",
+  "version": "1.0.0",
+  "description": "Monty Health Monitoring Service",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "go run main.go",
+    "build": "cd frontend && npm run build && go build -o monty",
+    "start": "./monty"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

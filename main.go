@@ -1,15 +1,20 @@
 package main
 
 import (
+	"embed"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/template/html/v2"
 	"github.com/monty/handlers"
 	"github.com/monty/models"
 	"github.com/monty/worker"
 )
+
+//go:embed static/*
+var staticFiles embed.FS
 
 func main() {
 	models.ConnectDatabase()
@@ -25,7 +30,19 @@ func main() {
 		Views: engine,
 	})
 
-	app.Static("/static", "./static")
+	app.Use(cors.New())
+
+	// Serve static files from embedded FS in production
+	app.Static("/static", "./static") // Fallback for development
+	app.Get("/static/*", func(c *fiber.Ctx) error {
+		path := c.Params("*")
+		data, err := staticFiles.ReadFile("static/" + path)
+		if err != nil {
+			return c.Status(404).SendString("File not found")
+		}
+		c.Set("Content-Type", getContentType(path))
+		return c.Send(data)
+	})
 
 	handlers.RegisterHealth(app)
 	handlers.RegisterEndpoints(app)
@@ -56,4 +73,14 @@ func main() {
 
 	// Wait forever
 	select {}
+}
+
+func getContentType(filename string) string {
+	if strings.HasSuffix(filename, ".js") {
+		return "application/javascript"
+	}
+	if strings.HasSuffix(filename, ".css") {
+		return "text/css"
+	}
+	return "text/plain"
 }
