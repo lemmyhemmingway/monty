@@ -7,7 +7,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/template/html/v2"
 	"github.com/monty/handlers"
 	"github.com/monty/models"
 	"github.com/monty/worker"
@@ -22,13 +21,7 @@ func main() {
 		panic(err)
 	}
 
-	engine := html.New("./templates", ".html")
-	engine.AddFunc("contains", strings.Contains)
-	engine.AddFunc("add", func(a, b int) int { return a + b })
-	engine.AddFunc("inc", func(a int) int { return a + 1 })
-	app := fiber.New(fiber.Config{
-		Views: engine,
-	})
+	app := fiber.New()
 
 	app.Use(cors.New())
 
@@ -44,9 +37,14 @@ func main() {
 		return c.Send(data)
 	})
 
-	handlers.RegisterHealth(app)
-	handlers.RegisterEndpoints(app)
-	handlers.RegisterDashboard(app)
+	api := app.Group("/api")
+	handlers.RegisterHealth(api)
+	handlers.RegisterEndpoints(api)
+
+	// Serve React app for all other routes
+	app.Get("/*", func(c *fiber.Ctx) error {
+		return c.SendFile("./static/index.html")
+	})
 
 	var eps []models.Endpoint
 	models.DB.Find(&eps)
@@ -68,8 +66,7 @@ func main() {
 
 	// Start worker after a short delay to ensure server is up
 	time.Sleep(1 * time.Second)
-	w := worker.NewWorker(1 * time.Minute) // Check for new endpoints every minute
-	w.Start(workerEps)
+	worker.StartGlobalWorker(workerEps)
 
 	// Wait forever
 	select {}

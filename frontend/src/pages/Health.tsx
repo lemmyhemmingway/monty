@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Typography, IconButton, Menu, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField } from '@mui/material'
-import { MoreVert as MoreVertIcon } from '@mui/icons-material'
+import { Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Typography, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField } from '@mui/material'
+import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material'
 
-interface EndpointWithStatus {
+interface EndpointWithUptime {
   id: string
   url: string
   check_type: string
@@ -14,17 +14,29 @@ interface EndpointWithStatus {
   check_chain: boolean
   check_domain_match: boolean
   acceptable_tls_versions: string[]
-  status: string
+  uptime: number
 }
 
 const Health = () => {
-  const [endpoints, setEndpoints] = useState<EndpointWithStatus[]>([])
+  const [endpoints, setEndpoints] = useState<EndpointWithUptime[]>([])
   const [loading, setLoading] = useState(true)
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
-  const [selectedEndpoint, setSelectedEndpoint] = useState<EndpointWithStatus | null>(null)
+  const [selectedEndpoint, setSelectedEndpoint] = useState<EndpointWithUptime | null>(null)
   const [updateOpen, setUpdateOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
   const [updateForm, setUpdateForm] = useState({
+    url: '',
+    check_type: 'http',
+    interval: 60,
+    timeout: 30,
+    max_response_time: 5000,
+    expected_status_codes: '200,201,202,203,204,205,206,207,208,226,300,301,302,303,304,305,307,308',
+    min_days_valid: 30,
+    check_chain: true,
+    check_domain_match: true,
+    acceptable_tls_versions: 'TLS 1.2,TLS 1.3'
+  })
+  const [createForm, setCreateForm] = useState({
     url: '',
     check_type: 'http',
     interval: 60,
@@ -54,38 +66,26 @@ const Health = () => {
     fetchEndpoints()
   }, [])
 
-  const handleMenuClick = (event: React.MouseEvent<HTMLElement>, endpoint: EndpointWithStatus) => {
-    setAnchorEl(event.currentTarget)
+  const handleEditClick = (endpoint: EndpointWithUptime) => {
     setSelectedEndpoint(endpoint)
+    setUpdateForm({
+      url: endpoint.url,
+      check_type: endpoint.check_type,
+      interval: endpoint.interval,
+      timeout: endpoint.timeout,
+      max_response_time: endpoint.max_response_time,
+      expected_status_codes: endpoint.expected_status_codes?.join(',') || '',
+      min_days_valid: endpoint.min_days_valid,
+      check_chain: endpoint.check_chain,
+      check_domain_match: endpoint.check_domain_match,
+      acceptable_tls_versions: endpoint.acceptable_tls_versions?.join(',') || ''
+    })
+    setUpdateOpen(true)
   }
 
-  const handleMenuClose = () => {
-    setAnchorEl(null)
-    setSelectedEndpoint(null)
-  }
-
-  const handleUpdateClick = () => {
-    if (selectedEndpoint) {
-      setUpdateForm({
-        url: selectedEndpoint.url,
-        check_type: selectedEndpoint.check_type,
-        interval: selectedEndpoint.interval,
-        timeout: selectedEndpoint.timeout,
-        max_response_time: selectedEndpoint.max_response_time,
-        expected_status_codes: selectedEndpoint.expected_status_codes?.join(',') || '',
-        min_days_valid: selectedEndpoint.min_days_valid,
-        check_chain: selectedEndpoint.check_chain,
-        check_domain_match: selectedEndpoint.check_domain_match,
-        acceptable_tls_versions: selectedEndpoint.acceptable_tls_versions?.join(',') || ''
-      })
-      setUpdateOpen(true)
-    }
-    handleMenuClose()
-  }
-
-  const handleDeleteClick = () => {
+  const handleDeleteClick = (endpoint: EndpointWithUptime) => {
+    setSelectedEndpoint(endpoint)
     setDeleteOpen(true)
-    handleMenuClose()
   }
 
   const handleUpdateSubmit = () => {
@@ -115,6 +115,43 @@ const Health = () => {
     }
   }
 
+  const handleCreateSubmit = () => {
+    const data = {
+      ...createForm,
+      expected_status_codes: createForm.expected_status_codes.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)),
+      acceptable_tls_versions: createForm.acceptable_tls_versions.split(',')
+    }
+    fetch('/api/endpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+        return res.json()
+      })
+      .then(() => {
+        setCreateOpen(false)
+        setCreateForm({
+          url: '',
+          check_type: 'http',
+          interval: 60,
+          timeout: 30,
+          max_response_time: 5000,
+          expected_status_codes: '200,201,202,203,204,205,206,207,208,226,300,301,302,303,304,305,307,308',
+          min_days_valid: 30,
+          check_chain: true,
+          check_domain_match: true,
+          acceptable_tls_versions: 'TLS 1.2,TLS 1.3'
+        })
+        fetchEndpoints()
+      })
+      .catch(err => {
+        console.error('Error creating endpoint:', err)
+        alert('Create failed: ' + err.message)
+      })
+  }
+
   const handleDeleteConfirm = () => {
     if (selectedEndpoint) {
       fetch(`/api/endpoints/${selectedEndpoint.id}`, {
@@ -137,6 +174,9 @@ const Health = () => {
       <Typography variant="h5" gutterBottom>
         Uptime Table
       </Typography>
+      <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)} style={{ marginBottom: 16 }}>
+        Add Endpoint
+      </Button>
       {loading ? (
         <Typography>Loading...</Typography>
       ) : (
@@ -145,7 +185,9 @@ const Health = () => {
             <TableHead>
               <TableRow>
                 <TableCell>Endpoint URL</TableCell>
-                <TableCell>Status</TableCell>
+                <TableCell>Type</TableCell>
+                <TableCell>Interval</TableCell>
+                <TableCell>Uptime</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -153,10 +195,15 @@ const Health = () => {
               {endpoints.map((endpoint) => (
                 <TableRow key={endpoint.id}>
                   <TableCell>{endpoint.url}</TableCell>
-                  <TableCell>{endpoint.status}</TableCell>
+                  <TableCell>{endpoint.check_type}</TableCell>
+                  <TableCell>{endpoint.interval}s</TableCell>
+                  <TableCell>{endpoint.uptime.toFixed(1)}%</TableCell>
                   <TableCell>
-                    <IconButton onClick={(e) => handleMenuClick(e, endpoint)}>
-                      <MoreVertIcon />
+                    <IconButton onClick={() => handleEditClick(endpoint)}>
+                      <EditIcon />
+                    </IconButton>
+                    <IconButton onClick={() => handleDeleteClick(endpoint)}>
+                      <DeleteIcon />
                     </IconButton>
                   </TableCell>
                 </TableRow>
@@ -165,14 +212,7 @@ const Health = () => {
           </Table>
         </TableContainer>
       )}
-      <Menu
-        anchorEl={anchorEl}
-        open={Boolean(anchorEl)}
-        onClose={handleMenuClose}
-      >
-        <MenuItem onClick={handleUpdateClick}>Update</MenuItem>
-        <MenuItem onClick={handleDeleteClick}>Delete</MenuItem>
-      </Menu>
+
       <Dialog open={updateOpen} onClose={() => setUpdateOpen(false)}>
         <DialogTitle>Update Endpoint</DialogTitle>
         <DialogContent>
@@ -218,6 +258,53 @@ const Health = () => {
         <DialogActions>
           <Button onClick={() => setUpdateOpen(false)}>Cancel</Button>
           <Button onClick={handleUpdateSubmit}>Update</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={createOpen} onClose={() => setCreateOpen(false)}>
+        <DialogTitle>Create Endpoint</DialogTitle>
+        <DialogContent>
+          <TextField
+            margin="dense"
+            label="URL"
+            fullWidth
+            value={createForm.url}
+            onChange={(e) => setCreateForm({ ...createForm, url: e.target.value })}
+          />
+          <TextField
+            margin="dense"
+            label="Check Type"
+            fullWidth
+            value={createForm.check_type}
+            onChange={(e) => setCreateForm({ ...createForm, check_type: e.target.value })}
+          />
+          <TextField
+            margin="dense"
+            label="Interval"
+            type="number"
+            fullWidth
+            value={createForm.interval}
+            onChange={(e) => setCreateForm({ ...createForm, interval: parseInt(e.target.value) || 0 })}
+          />
+          <TextField
+            margin="dense"
+            label="Timeout"
+            type="number"
+            fullWidth
+            value={createForm.timeout}
+            onChange={(e) => setCreateForm({ ...createForm, timeout: parseInt(e.target.value) || 0 })}
+          />
+          <TextField
+            margin="dense"
+            label="Max Response Time"
+            type="number"
+            fullWidth
+            value={createForm.max_response_time}
+            onChange={(e) => setCreateForm({ ...createForm, max_response_time: parseInt(e.target.value) || 0 })}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
+          <Button onClick={handleCreateSubmit}>Create</Button>
         </DialogActions>
       </Dialog>
       <Dialog open={deleteOpen} onClose={() => setDeleteOpen(false)}>

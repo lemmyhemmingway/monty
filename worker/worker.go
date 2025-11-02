@@ -282,8 +282,8 @@ func (w *Worker) CheckSSLEndpoint(ep Endpoint) {
 	tlsVersion := tlsVersionString(conn.ConnectionState().Version)
 	versionAcceptable := w.isTLSVersionAcceptable(tlsVersion, ep.AcceptableTLSVersions)
 
-	// Determine overall validity
-	isValid := !isExpired && !expiresSoon && domainMatches && chainValid && versionAcceptable
+	// Determine overall validity - only fail if expired
+	isValid := !isExpired && domainMatches && chainValid && versionAcceptable
 
 	// Log result
 	if isValid {
@@ -314,9 +314,6 @@ func (w *Worker) CheckSSLEndpoint(ep Endpoint) {
 		if isExpired {
 			errors = append(errors, "certificate expired")
 		}
-		if expiresSoon {
-			errors = append(errors, "certificate expires soon")
-		}
 		if !domainMatches {
 			errors = append(errors, "domain mismatch")
 		}
@@ -327,6 +324,9 @@ func (w *Worker) CheckSSLEndpoint(ep Endpoint) {
 			errors = append(errors, "unsupported TLS version")
 		}
 		status.ErrorMessage = strings.Join(errors, "; ")
+		if expiresSoon {
+			status.ErrorMessage += " (warning: certificate expires soon)"
+		}
 	}
 
 	w.saveSSLStatus(ep.ID, status)
@@ -711,6 +711,46 @@ func (w *Worker) discoverEndpoints() {
 	}
 
 	w.mu.Lock() // Re-lock for the defer
+}
+
+// Global worker instance for immediate updates
+var GlobalWorker *Worker
+
+// Initialize global worker
+func InitGlobalWorker(discoveryInterval time.Duration) {
+	GlobalWorker = NewWorker(discoveryInterval)
+}
+
+// Get global worker
+func GetGlobalWorker() *Worker {
+	return GlobalWorker
+}
+
+// Start global worker
+func StartGlobalWorker(initialEndpoints []Endpoint) {
+	if GlobalWorker == nil {
+		InitGlobalWorker(1 * time.Minute)
+	}
+	GlobalWorker.Start(initialEndpoints)
+}
+
+// Convenience methods for global worker
+func StopMonitoring(endpointID string) {
+	if GlobalWorker != nil {
+		GlobalWorker.stopMonitoring(endpointID)
+	}
+}
+
+func StartMonitoring(ep Endpoint) {
+	if GlobalWorker != nil {
+		GlobalWorker.startMonitoring(ep)
+	}
+}
+
+func UpdateMonitoring(ep Endpoint) {
+	if GlobalWorker != nil {
+		GlobalWorker.updateMonitoring(ep)
+	}
 }
 
 // Legacy function for backward compatibility

@@ -5,6 +5,7 @@ import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Endpoints from './pages/Endpoints'
 import Health from './pages/Health'
+import SSL from './pages/SSL'
 
 const theme = createTheme({
   palette: {
@@ -36,6 +37,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/endpoints" element={<Endpoints />} />
             <Route path="/health" element={<Health />} />
+            <Route path="/ssl" element={<SSL />} />
           </Routes>
         </Layout>
       </Router>

@@ -2,7 +2,7 @@ package handlers
 
 import "github.com/gofiber/fiber/v2"
 
-func RegisterHealth(app *fiber.App) {
+func RegisterHealth(app fiber.Router) {
 	app.Get("/health", healthHandler)
 }
 

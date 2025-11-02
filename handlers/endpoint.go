@@ -12,12 +12,12 @@ import (
 	"github.com/monty/worker"
 )
 
-type EndpointWithStatus struct {
-	models.Endpoint
-	StatusString string `json:"status"`
+type EndpointWithUptime struct {
+models.Endpoint
+Uptime float64 `json:"uptime"`
 }
 
-func RegisterEndpoints(app *fiber.App) {
+func RegisterEndpoints(app fiber.Router) {
 	app.Get("/endpoints", listEndpoints)
 	app.Post("/endpoints", createEndpoint)
 	app.Put("/endpoints/:id", updateEndpoint)
@@ -121,12 +121,12 @@ func listEndpoints(c *fiber.Ctx) error {
 	var endpoints []models.Endpoint
 	models.DB.Find(&endpoints)
 
-	var response []EndpointWithStatus
+	var response []EndpointWithUptime
 	for _, ep := range endpoints {
-		status := calculateStatus(ep)
-		response = append(response, EndpointWithStatus{
-			Endpoint:     ep,
-			StatusString: status,
+		uptime := calculateUptime(ep.ID)
+		response = append(response, EndpointWithUptime{
+			Endpoint: ep,
+			Uptime:   uptime,
 		})
 	}
 
@@ -183,8 +183,8 @@ func createEndpoint(c *fiber.Ctx) error {
 		checkType = input.CheckType
 	}
 
-	minDaysValid := 30
-	if input.MinDaysValid != nil && *input.MinDaysValid > 0 {
+	minDaysValid := 7
+	if input.MinDaysValid != nil && *input.MinDaysValid >= 0 {
 		minDaysValid = *input.MinDaysValid
 	}
 
@@ -224,25 +224,28 @@ func createEndpoint(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not create endpoint"})
 	}
 
+	// Start monitoring the new endpoint immediately
+	workerEp := worker.Endpoint{
+		ID:                   ep.ID,
+		URL:                  ep.URL,
+		CheckType:            ep.CheckType,
+		Interval:             time.Duration(ep.Interval) * time.Second,
+		Timeout:              time.Duration(ep.Timeout) * time.Second,
+		ExpectedStatusCodes:  []int(ep.ExpectedStatusCodes),
+		MaxResponseTime:      time.Duration(ep.MaxResponseTime) * time.Millisecond,
+		MinDaysValid:         ep.MinDaysValid,
+		CheckChain:           ep.CheckChain,
+		CheckDomainMatch:     ep.CheckDomainMatch,
+		AcceptableTLSVersions: ep.AcceptableTLSVersions,
+		DNSRecordType:        ep.DNSRecordType,
+		ExpectedDNSAnswers:   []int(ep.ExpectedDNSAnswers),
+		TCPPort:              ep.TCPPort,
+	}
+	worker.StartMonitoring(workerEp)
+
 	// Perform immediate check for the new endpoint
 	go func() {
-		workerEp := worker.Endpoint{
-			ID:                   ep.ID,
-			URL:                  ep.URL,
-			CheckType:            ep.CheckType,
-			Interval:             time.Duration(ep.Interval) * time.Second,
-			Timeout:              time.Duration(ep.Timeout) * time.Second,
-			ExpectedStatusCodes:  []int(ep.ExpectedStatusCodes),
-			MaxResponseTime:      time.Duration(ep.MaxResponseTime) * time.Millisecond,
-			MinDaysValid:         ep.MinDaysValid,
-			CheckChain:           ep.CheckChain,
-			CheckDomainMatch:     ep.CheckDomainMatch,
-			AcceptableTLSVersions: ep.AcceptableTLSVersions,
-			DNSRecordType:        ep.DNSRecordType,
-			ExpectedDNSAnswers:   []int(ep.ExpectedDNSAnswers),
-			TCPPort:              ep.TCPPort,
-		}
-		// Create a dummy worker to use its methods
+		// Create a dummy worker to use its methods for immediate check
 		w := worker.NewWorker(1 * time.Minute)
 		switch workerEp.CheckType {
 		case "ssl":
@@ -327,6 +330,25 @@ func updateEndpoint(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not update endpoint"})
 	}
 
+	// Update monitoring for the endpoint
+	workerEp := worker.Endpoint{
+		ID:                   ep.ID,
+		URL:                  ep.URL,
+		CheckType:            ep.CheckType,
+		Interval:             time.Duration(ep.Interval) * time.Second,
+		Timeout:              time.Duration(ep.Timeout) * time.Second,
+		ExpectedStatusCodes:  []int(ep.ExpectedStatusCodes),
+		MaxResponseTime:      time.Duration(ep.MaxResponseTime) * time.Millisecond,
+		MinDaysValid:         ep.MinDaysValid,
+		CheckChain:           ep.CheckChain,
+		CheckDomainMatch:     ep.CheckDomainMatch,
+		AcceptableTLSVersions: ep.AcceptableTLSVersions,
+		DNSRecordType:        ep.DNSRecordType,
+		ExpectedDNSAnswers:   []int(ep.ExpectedDNSAnswers),
+		TCPPort:              ep.TCPPort,
+	}
+	worker.UpdateMonitoring(workerEp)
+
 	return c.JSON(ep)
 }
 
@@ -351,6 +373,9 @@ func deleteEndpoint(c *fiber.Ctx) error {
 	models.DB.Where("endpoint_id = ?", id).Delete(&models.Status{})
 	models.DB.Where("endpoint_id = ?", id).Delete(&models.SSLStatus{})
 	models.DB.Where("endpoint_id = ?", id).Delete(&models.DomainStatus{})
+
+	// Stop monitoring the endpoint
+	worker.StopMonitoring(id)
 
 	return c.JSON(fiber.Map{"message": "endpoint deleted successfully"})
 }

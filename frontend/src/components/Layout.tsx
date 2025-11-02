@@ -1,5 +1,5 @@
 import { Drawer, List, ListItem, ListItemButton, ListItemText, ListItemIcon, AppBar, Toolbar, Typography } from '@mui/material'
-import { Dashboard as DashboardIcon, Settings as SettingsIcon, HealthAndSafety as HealthIcon } from '@mui/icons-material'
+import { Dashboard as DashboardIcon, Settings as SettingsIcon, HealthAndSafety as HealthIcon, Https as SSLIcon } from '@mui/icons-material'
 import { Link } from 'react-router-dom'
 
 interface LayoutProps {
@@ -45,6 +45,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <HealthIcon />
               </ListItemIcon>
               <ListItemText primary="Health" />
+            </ListItemButton>
+          </ListItem>
+          <ListItem disablePadding>
+            <ListItemButton component={Link} to="/ssl">
+              <ListItemIcon>
+                <SSLIcon />
+              </ListItemIcon>
+              <ListItemText primary="SSL" />
             </ListItemButton>
           </ListItem>
           <ListItem disablePadding>
