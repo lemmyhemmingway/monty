@@ -20,6 +20,7 @@ type EndpointWithStatus struct {
 func RegisterEndpoints(app *fiber.App) {
 	app.Get("/endpoints", listEndpoints)
 	app.Post("/endpoints", createEndpoint)
+	app.Put("/endpoints/:id", updateEndpoint)
 	app.Delete("/endpoints/:id", deleteEndpoint)
 	app.Get("/endpoint-urls", listEndpointURLs)
 	app.Get("/statuses", listStatuses)
@@ -260,6 +261,73 @@ func createEndpoint(c *fiber.Ctx) error {
 	}()
 
 	return c.Status(fiber.StatusCreated).JSON(ep)
+}
+
+func updateEndpoint(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if id == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "endpoint id required"})
+	}
+
+	var input struct {
+		URL                  string   `json:"url"`
+		CheckType            string   `json:"check_type,omitempty"`
+		Interval             int      `json:"interval"`
+		Timeout              *int     `json:"timeout,omitempty"`
+		ExpectedStatusCodes  []int    `json:"expected_status_codes,omitempty"`
+		MaxResponseTime      *int     `json:"max_response_time,omitempty"`
+		MinDaysValid         *int     `json:"min_days_valid,omitempty"`
+		CheckChain           *bool    `json:"check_chain,omitempty"`
+		CheckDomainMatch     *bool    `json:"check_domain_match,omitempty"`
+		AcceptableTLSVersions []string `json:"acceptable_tls_versions,omitempty"`
+	}
+	if err := c.BodyParser(&input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid input"})
+	}
+
+	// Find existing endpoint
+	var ep models.Endpoint
+	if err := models.DB.First(&ep, "id = ?", id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "endpoint not found"})
+	}
+
+	// Update fields if provided
+	if input.URL != "" {
+		ep.URL = strings.TrimSpace(input.URL)
+	}
+	if input.CheckType != "" {
+		ep.CheckType = input.CheckType
+	}
+	if input.Interval > 0 {
+		ep.Interval = input.Interval
+	}
+	if input.Timeout != nil && *input.Timeout > 0 {
+		ep.Timeout = *input.Timeout
+	}
+	if input.MaxResponseTime != nil && *input.MaxResponseTime > 0 {
+		ep.MaxResponseTime = *input.MaxResponseTime
+	}
+	if len(input.ExpectedStatusCodes) > 0 {
+		ep.ExpectedStatusCodes = models.IntArray(input.ExpectedStatusCodes)
+	}
+	if input.MinDaysValid != nil && *input.MinDaysValid > 0 {
+		ep.MinDaysValid = *input.MinDaysValid
+	}
+	if input.CheckChain != nil {
+		ep.CheckChain = *input.CheckChain
+	}
+	if input.CheckDomainMatch != nil {
+		ep.CheckDomainMatch = *input.CheckDomainMatch
+	}
+	if len(input.AcceptableTLSVersions) > 0 {
+		ep.AcceptableTLSVersions = models.StringArray(input.AcceptableTLSVersions)
+	}
+
+	if err := models.DB.Save(&ep).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not update endpoint"})
+	}
+
+	return c.JSON(ep)
 }
 
 func deleteEndpoint(c *fiber.Ctx) error {

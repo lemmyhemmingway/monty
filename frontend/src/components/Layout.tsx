@@ -1,5 +1,6 @@
-import { Drawer, List, ListItem, ListItemButton, ListItemText, ListItemIcon } from '@mui/material'
-import { Dashboard as DashboardIcon, Settings as SettingsIcon } from '@mui/icons-material'
+import { Drawer, List, ListItem, ListItemButton, ListItemText, ListItemIcon, AppBar, Toolbar, Typography } from '@mui/material'
+import { Dashboard as DashboardIcon, Settings as SettingsIcon, HealthAndSafety as HealthIcon } from '@mui/icons-material'
+import { Link } from 'react-router-dom'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -10,6 +11,13 @@ const drawerWidth = 240
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   return (
     <>
+      <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
+        <Toolbar>
+          <Typography variant="h6" noWrap component="div">
+            Monty Health Monitoring
+          </Typography>
+        </Toolbar>
+      </AppBar>
       <Drawer
         variant="permanent"
         sx={{
@@ -18,16 +26,25 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           '& .MuiDrawer-paper': {
             width: drawerWidth,
             boxSizing: 'border-box',
+            top: 64,
           },
         }}
       >
         <List>
           <ListItem disablePadding>
-            <ListItemButton>
+            <ListItemButton component={Link} to="/">
               <ListItemIcon>
                 <DashboardIcon />
               </ListItemIcon>
               <ListItemText primary="Dashboard" />
+            </ListItemButton>
+          </ListItem>
+          <ListItem disablePadding>
+            <ListItemButton component={Link} to="/health">
+              <ListItemIcon>
+                <HealthIcon />
+              </ListItemIcon>
+              <ListItemText primary="Health" />
             </ListItemButton>
           </ListItem>
           <ListItem disablePadding>
@@ -40,7 +57,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </ListItem>
         </List>
       </Drawer>
-      <div style={{ marginLeft: drawerWidth, padding: 16 }}>
+      <div style={{ marginLeft: drawerWidth, padding: 16, marginTop: 64 }}>
         {children}
       </div>
     </>
